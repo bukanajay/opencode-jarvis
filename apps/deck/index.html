@@ -316,6 +316,7 @@
   const nodes = new Map(); // id -> {x, y, tx, ty, phase}
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   let timerOn = false;
+  let busy = false; // a Jarvis turn is in flight: sweep quickens, core works harder
   function requestFrame() {
     // setTimeout chain, not rAF: the loop must survive throttled frames.
     if (!timerOn) { timerOn = true; setTimeout(() => { timerOn = false; draw(performance.now()); }, 33); }
@@ -363,6 +364,7 @@
   }
   function draw(now) {
     timerOn = false;
+    try {
     // re-fit if layout changed since last paint
     const wantW = Math.max(1, Math.round(ring.getBoundingClientRect().width * Math.min(window.devicePixelRatio || 1, 2)));
     if (ring.width !== wantW) { sizeCanvas(); layoutTargets(); }
@@ -455,7 +457,10 @@
       }
     }
     // ambient loop: the fleet breathes; state changes still ease in 120–200ms
-    setTimeout(requestFrame, reduceMotion ? 1000 : 33);
+    } finally {
+      // a bad frame must never kill the loop
+      setTimeout(requestFrame, reduceMotion ? 1000 : 33);
+    }
   }
   ring.addEventListener("click", (e) => {
     const r = ring.getBoundingClientRect();
@@ -564,8 +569,8 @@
   });
   window.jarvis?.onPermissionResolved(() => { unmountCard("perm"); $("perm").classList.remove("show"); sndDone(); });
   const scrollLog = () => { log.scrollTop = log.scrollHeight; };
-  const showWorking = () => { $("working").classList.add("show"); scrollLog(); };
-  const hideWorking = () => { $("working").classList.remove("show"); };
+  const showWorking = () => { busy = true; $("working").classList.add("show"); scrollLog(); };
+  const hideWorking = () => { busy = false; $("working").classList.remove("show"); };
   window.jarvis?.onStream(({ delta }) => { log.textContent += delta; hideWorking(); scrollLog(); });
   window.jarvis?.onDone(({ modelUsed, status }) => {
     hideWorking();
