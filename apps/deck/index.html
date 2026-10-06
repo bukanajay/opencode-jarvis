@@ -70,6 +70,12 @@
   }
   h2 .live { color: var(--accent); }
   .deck { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
+  section.chat { display: flex; flex-direction: column; }
+  section.chat #log { flex: 1; }
+  #working { display: none; font-family: var(--cap); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); padding: 6px 0 0; }
+  #working.show { display: block; }
+  #working .dots::after { content: ""; animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
   #ring-wrap { position: relative; }
   #ring { width: 100%; height: 340px; display: block; border-radius: 8px; cursor: pointer; }
@@ -181,6 +187,7 @@
     <section class="chat">
       <h2>Transcript</h2>
       <div id="log" aria-live="polite"></div>
+      <div id="working" aria-hidden="true"><span class="pulse"></span> working<span class="dots"></span></div>
       <div id="caption" aria-live="polite"></div>
       <form id="f">
         <input id="q" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" spellcheck="false" />
@@ -565,13 +572,18 @@
     renderRing(workers.map((w) => w.id === request.sessionID ? { ...w, state: "permission", pending: request } : w));
   });
   window.jarvis?.onPermissionResolved(() => { unmountCard("perm"); $("perm").classList.remove("show"); sndDone(); });
-  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
+  const scrollLog = () => { log.scrollTop = log.scrollHeight; };
+  const showWorking = () => { $("working").classList.add("show"); scrollLog(); };
+  const hideWorking = () => { $("working").classList.remove("show"); };
+  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; hideWorking(); scrollLog(); });
   window.jarvis?.onDone(({ modelUsed, status }) => {
+    hideWorking();
     const line = `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;
     const s = document.createElement("span");
     s.className = "sys";
     s.textContent = line;
     log.appendChild(s);
+    scrollLog();
     if (modelUsed) $("h-model").textContent = `${modelUsed.id}${modelUsed.id === "gpt-6-luna" ? "" : "*"}`;
     (status === "ok" ? sndDone : sndFault)();
   });
@@ -808,17 +820,21 @@
     if (!text) return;
     $("q").value = "";
     log.textContent += "\n> " + text + "\n";
+    scrollLog();
     const m = text.match(/^launch worker:\s*(.+)/i);
-    if (m) { spawnNote(await window.jarvis.fleetSpawn(m[1])); return; }
+    if (m) { showWorking(); spawnNote(await window.jarvis.fleetSpawn(m[1])); hideWorking(); scrollLog(); return; }
     const files = staged ? [{ uri: staged.uri, name: staged.name }] : [];
     if (staged) { log.textContent += `[attached ${staged.name}]\n`; staged = null; paintStaged(); }
+    showWorking();
     const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files })
       .catch((e) => ({ ok: false, reason: String(e.message ?? e) }));
-    if (!r?.ok) { log.textContent += `\n[fault] ${r?.reason ?? "send failed"}\n`; sndFault(); return; }
+    if (!r?.ok) { hideWorking(); log.textContent += `\n[fault] ${r?.reason ?? "send failed"}\n`; sndFault(); scrollLog(); return; }
     if (r?.control === "command" || r?.control === "skill") log.textContent += `\n[${r.control} ${r.name} sent]\n`;
     if (r?.control === "app.command") log.textContent += `\n[settings] ${r.entry.what} — live\n`;
     if (r?.control === "config.apply") log.textContent += `\n[config] ${r.note ?? r.name}\n`;
     if (r?.control === "config.stage") log.textContent += `\n[config] staged — confirm on the card\n`;
+    if (r && !("sessionID" in r)) hideWorking();
+    scrollLog();
   });
   // One clip stages one file for the next message; sent once, then cleared.
   let staged = null;
@@ -876,7 +892,8 @@
     cap.textContent = "listening…";
     const r = await window.jarvis.audioStart({});
     micBtn.classList.remove("live");
-    if (!r?.ok) cap.textContent = r?.reason ?? "mic stopped";
+    if (!r?.ok) { cap.textContent = r?.reason ?? "mic stopped"; return; }
+    if (r?.utterance) showWorking();
   };
   let termID = null, termTimer = null;
   $("yard-toggle").onclick = () => {
