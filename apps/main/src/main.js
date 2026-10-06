@@ -238,6 +238,23 @@ app.whenReady().then(async () => {
   ipcMain.handle("pty.open", async () => ptyOpen(process.cwd()));
   ipcMain.handle("pty.resize", async (_e, { ptyID, rows, cols } = {}) => ptyResize(ptyID, process.cwd(), rows, cols));
   ipcMain.handle("pty.close", async (_e, { ptyID } = {}) => ptyClose(ptyID, process.cwd()));
+  ipcMain.handle("mcp.list", async () => {
+    const { client } = await ensureClient();
+    return { ok: true, servers: (await client.mcp.list()).data ?? [] };
+  });
+  ipcMain.handle("integration.list", async () => {
+    const { client } = await ensureClient();
+    return { ok: true, providers: (await client.integration.list()).data ?? [] };
+  });
+  ipcMain.handle("oauth.connect", async (_e, { integrationID, methodID } = {}) => {
+    const { client } = await ensureClient();
+    return { ok: true, attempt: await client.integration.oauth.connect({ integrationID, methodID }) };
+  });
+  ipcMain.handle("oauth.cancel", async (_e, { integrationID, attemptID } = {}) => {
+    const { client } = await ensureClient();
+    await client.integration.oauth.cancel({ integrationID, attemptID });
+    return { ok: true };
+  });
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

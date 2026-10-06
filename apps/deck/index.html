@@ -93,6 +93,11 @@
     </form>
   </section>
   <p><button class="ghost" id="yard-toggle">Open yard</button></p>
+  <section id="mcp">
+    <h2>MCP</h2>
+    <div class="res" id="mcp-list"></div>
+    <p><button class="ghost" id="mcp-refresh">Refresh</button></p>
+  </section>
   <section>
     <h2>Composer</h2>
     <div id="caption" aria-live="polite"></div>
@@ -376,6 +381,15 @@
     termTimer = setInterval(termPoll, 1000);
   });
   $("term-kill").onclick = async () => { if (termID) { await window.jarvis.termKill(termID); termID = null; clearInterval(termTimer); } };
+  // MCP: status for every server, sign-in by hand when disconnected.
+  async function mcpRefresh() {
+    try {
+      const r = await window.jarvis.mcpList();
+      $("mcp-list").textContent = (r.servers ?? []).map((s) => `${s.name}: ${s.status?.status ?? "unknown"}`).join("\n") || "(none)";
+    } catch (e) { $("mcp-list").textContent = String(e.message ?? e); }
+  }
+  $("mcp-refresh").onclick = mcpRefresh;
+  mcpRefresh();
 </script>
 </body>
 </html>
