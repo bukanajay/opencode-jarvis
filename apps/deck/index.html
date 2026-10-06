@@ -385,14 +385,18 @@
   }
   function layoutTargets() {
     const W = ring.width, H = ring.height;
-    const cx = W / 2, cy = H / 2, rx = W * 0.36, ry = H * 0.34;
+    const cx = W / 2, cy = H / 2, R = Math.min(W * 0.36, H * 0.34);
+    let j = nodes.get("__jarvis");
+    if (!j) { j = { x: cx, y: cy, tx: cx, ty: cy }; nodes.set("__jarvis", j); }
+    j.tx = cx;
+    j.ty = cy;
     workers.forEach((w, i) => {
       let n = nodes.get(w.id);
       if (!n) { n = { x: cx, y: cy, tx: cx, ty: cy, phase: (i * 1.7) % (Math.PI * 2) }; nodes.set(w.id, n); }
       if (w.state === "permission" || w.pending) { n.tx = cx; n.ty = cy; return; }
       const a = (2 * Math.PI * i) / Math.max(workers.length, 1) - Math.PI / 2;
-      n.tx = cx + rx * Math.cos(a);
-      n.ty = cy + ry * Math.sin(a);
+      n.tx = cx + R * Math.cos(a);
+      n.ty = cy + R * Math.sin(a);
     });
     for (const id of [...nodes.keys()]) {
       if (id !== "__jarvis" && !workers.some((w) => w.id === id)) nodes.delete(id);
@@ -430,24 +434,28 @@
     for (let x = step / 2; x < W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
     for (let y = step / 2; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
-    // orbit + slow sweep
+    // orbit + slow sweep (a true circle: radius follows the smaller dimension)
+    const R = Math.min(W * 0.36, H * 0.34);
     ctx.strokeStyle = "rgba(120,150,140,0.28)";
     ctx.beginPath();
-    ctx.ellipse(W / 2, H / 2, W * 0.36, H * 0.34, 0, 0, Math.PI * 2);
+    ctx.arc(W / 2, H / 2, R, 0, Math.PI * 2);
     ctx.stroke();
     if (!reduceMotion) {
       const sa = t * (Math.PI * 2 / (busy ? 2.5 : 9)); // sweep quickens while working
       ctx.strokeStyle = busy ? "rgba(200,240,74,0.4)" : "rgba(200,240,74,0.22)";
       ctx.lineWidth = 2 * dpr / 2;
       ctx.beginPath();
-      ctx.ellipse(W / 2, H / 2, W * 0.36, H * 0.34, 0, sa, sa + 0.7);
+      ctx.arc(W / 2, H / 2, R, sa, sa + 0.7);
       ctx.stroke();
     }
-    // jarvis center: slow breathing glow
+    // jarvis center: eased to the true center, sized to the orbit
     const j = nodes.get("__jarvis") ?? { x: W / 2, y: H / 2, tx: W / 2, ty: H / 2 };
     nodes.set("__jarvis", j);
+    const jk = 1 - Math.pow(0.001, 1 / 60);
+    j.x += (j.tx - j.x) * jk;
+    j.y += (j.ty - j.y) * jk;
     const breathe = 1 + (reduceMotion ? 0 : (busy ? 0.16 : 0.10) * Math.sin(t * (busy ? 3.2 : 1.1)));
-    const jr = 30 * dpr / 2 * breathe;
+    const jr = Math.max(30 * dpr / 2, R * 0.17) * breathe;
     const jg = ctx.createRadialGradient(j.x, j.y, 4, j.x, j.y, jr * 2.2);
     jg.addColorStop(0, busy ? "rgba(200,240,74,0.5)" : "rgba(200,240,74,0.32)");
     jg.addColorStop(1, "rgba(200,240,74,0)");
@@ -457,7 +465,7 @@
     ctx.lineWidth = 2 * dpr;
     ctx.beginPath(); ctx.arc(j.x, j.y, jr, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = "#e9f2ec";
-    ctx.font = `600 ${22 * dpr / 2}px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.font = `600 ${Math.round(jr * 0.95)}px ${getComputedStyle(document.body).fontFamily}`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("J", j.x, j.y + dpr);
     ctx.fillStyle = "rgba(160,180,170,0.9)";
