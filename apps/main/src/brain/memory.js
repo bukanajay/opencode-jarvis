@@ -1,10 +1,13 @@
 // Long-term memory: local JSON, no server involved. Facts are short durable
-// strings ("user prefers amber", "reviewer agent exists"). Recall is
+// strings ("user prefers amber", "reviewer agent exists"). Two stores: global
+// (about the user) and per project (conventions, commands, architecture);
+// recallAll searches both, project facts first. Recall is
 // embedding-first (local MiniLM) with BM25 fallback; only LLM fact
 // extraction remains a later slice.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { projectDir, projectStateDir } from "../project.js";
 
 const STOP = new Set("a,an,the,is,are,was,were,my,i,you,your,it,its,to,of,in,on,for,and,or,that,this,me,please".split(","));
 const MAX_FACTS = 200;
@@ -30,6 +33,18 @@ export function loadMemory(file = memoryPath()) {
   } catch {
     return { file, facts: [], preferences: {}, vectors: {} };
   }
+}
+
+export function projectMemoryPath(dir = projectDir()) {
+  return path.join(projectStateDir(dir), "memory.json");
+}
+
+export function loadProjectMemory(dir = projectDir()) {
+  return loadMemory(projectMemoryPath(dir));
+}
+
+export function saveMemory(mem) {
+  save(mem);
 }
 
 function save(mem) {
@@ -116,6 +131,22 @@ export async function recallSemantic(mem, query, limit = 5) {
   }
 }
 
+// Project facts first (they are the most specific), then global ones, no
+// duplicates, capped at limit overall.
+export async function recallAll(query, limit = 6, dir = projectDir()) {
+  const [proj, glob] = await Promise.all([
+    recallSemantic(loadProjectMemory(dir), query, limit).catch(() => []),
+    recallSemantic(loadMemory(), query, limit).catch(() => []),
+  ]);
+  const seen = new Set();
+  return [...proj, ...glob].filter((f) => {
+    const k = f.text.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, limit);
+}
+
 // BM25-lite: idf-weighted overlap with length norm. Sync fallback when the
 // local embedding provider is off or unavailable. No deps, no embeddings.
 export function bm25Recall(mem, query, limit = 5) {
@@ -143,6 +174,16 @@ export function bm25Recall(mem, query, limit = 5) {
     .sort((a, b) => b.score - a.score || b.fact.at - a.fact.at)
     .slice(0, limit)
     .map((r) => r.fact);
+}
+
+// Explicitly project-scoped facts: "remember for this project that …",
+// "remember in this repo …", "for this project, remember …".
+export function extractProjectCandidates(text) {
+  const t = String(text ?? "");
+  let m;
+  if ((m = t.match(/remember (?:for|in) this (?:project|repo|codebase)(?: that|:|,)?\s+(.{3,200})/i))) return [m[1].trim()];
+  if ((m = t.match(/(?:for|in) this (?:project|repo|codebase),? remember (?:that )?(.{3,200})/i))) return [m[1].trim()];
+  return [];
 }
 
 // Heuristic durable-fact extraction. No model call; LLM extraction is a later slice.

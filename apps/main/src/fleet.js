@@ -7,6 +7,7 @@ import { matchAppCommand, loadStore } from "./shell.js";
 import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 import { refreshForms, pendingForms } from "./forms.js";
 import { chains, publicChain } from "./worktrees.js";
+import { projectDir } from "./project.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -44,8 +45,9 @@ function workerEvent(sessionID) {
   };
 }
 
-export function snapshot() {
-  return [...workers.values()].map((w) => workerEvent(w.sessionID));
+// The ring shows the current project's workers; the pump tracks them all.
+export function snapshot(dir = projectDir()) {
+  return [...workers.values()].filter((w) => !w.project || w.project === dir).map((w) => workerEvent(w.sessionID));
 }
 
 export function publicForm(f) {
@@ -369,24 +371,29 @@ export function resolveWorkerModel() {
 
 export async function spawnWorker(task, opts = {}) {
   const { client } = await ensureClient();
-  const parentID = await ensureJarvisSession(process.cwd());
+  const project = opts.project ?? projectDir();
+  const parentID = await ensureJarvisSession(project);
   const model = opts.model ?? resolveWorkerModel();
-  const directory = opts.directory ?? process.cwd();
+  const directory = opts.directory ?? project;
   const agent = opts.agent ?? "build";
+  const round = opts.round ?? 0;
   const session = await client.session.create({
     parentID,
     agent,
     model,
     location: { directory },
     title: task.slice(0, 64),
+    // Chain bookkeeping rides on the session so a restart can rebuild it.
+    metadata: { jarvis: { task: task.slice(0, 2000), chain: opts.chain ?? null, round, project } },
   });
   const w = record(session.id);
   w.task = task;
   w.agent = agent;
   w.model = model;
   w.state = "idle";
+  w.project = project;
   w.chain = opts.chain ?? session.id;
-  w.round = opts.round ?? 0;
+  w.round = round;
   w.promptedAt = Date.now();
   await ensureFleetPump(opts.onEvent);
   await client.session.prompt({ sessionID: session.id, text: task });
@@ -395,6 +402,31 @@ export async function spawnWorker(task, opts = {}) {
 
 // Next step for an existing worker, same session and context. Counts as a
 // round of its chain so the review loop is bounded.
+// Rebuild worker records for a project from its persisted parent session's
+// children, so a restart keeps the ring, review loop and worktree chains.
+export async function rehydrateWorkers(client, parentID, project) {
+  const res = await client.session.list({ parentID, limit: 100, order: "desc" });
+  const rows = res?.data ?? res?.sessions ?? (Array.isArray(res) ? res : []);
+  let n = 0;
+  for (const info of rows) {
+    if (!info?.id || workers.has(info.id) || info.time?.archived) continue;
+    const meta = info.metadata?.jarvis ?? {};
+    const w = record(info.id);
+    w.task = meta.task ?? info.title ?? "";
+    w.agent = info.agent ?? "build";
+    w.model = info.model ?? null;
+    w.project = meta.project ?? project;
+    w.chain = meta.chain ?? info.id;
+    w.round = Number(meta.round ?? 0);
+    w.state = info.outcome === "succeeded" ? "done" : info.outcome === "failed" ? "failed" : info.outcome === "interrupted" ? "stopped" : info.time?.idle ? "idle" : "working";
+    // Already-finished runs are not re-reviewed after a restart.
+    w.promptedAt = info.time?.created ?? 0;
+    w.finishedAt = info.outcome ? Date.now() : 0;
+    n++;
+  }
+  return n;
+}
+
 export async function followUpWorker(sessionID, task) {
   const w = workers.get(sessionID);
   if (!w) throw new Error(`followup: unknown worker ${sessionID}`);
@@ -404,6 +436,7 @@ export async function followUpWorker(sessionID, task) {
   w.state = "working";
   w.promptedAt = Date.now();
   await client.session.prompt({ sessionID, text: task });
+  client.session.update({ sessionID, metadata: { jarvis: { task: w.task.slice(0, 2000), chain: w.chain, round: w.round, project: w.project ?? null } } }).catch(() => {});
   return { ok: true, sessionID, round: w.round };
 }
 

@@ -106,3 +106,16 @@ test("discard drops worktree and branch", async () => {
   assert.equal(fs.existsSync(chain.directory), false);
   assert.equal(sh(["branch", "--list", chain.branch], repo), "");
 });
+
+test("open chains persist in project state and reload after a restart", async () => {
+  const { readProjectState } = await import("../../apps/main/src/project.js");
+  const repo = makeRepo("persist");
+  const chain = await wt.createChainWorktree(repo, "persist me", "c7");
+  assert.deepEqual(readProjectState(repo).chains.map((c) => c.chainID), ["c7"]);
+  wt.chains.delete("c7");
+  assert.equal(wt.loadChains(repo), 1);
+  assert.equal(wt.chains.get("c7").branch, chain.branch);
+  await wt.discardChain("c7");
+  assert.deepEqual(readProjectState(repo).chains, []);
+  assert.equal(wt.loadChains(repo), 0);
+});

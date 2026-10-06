@@ -9,7 +9,7 @@
     "apps/*"
   ],
   "scripts": {
-    "test": "node --test \"tests/unit/*.test.mjs\"",
+    "test": "node --import ./tests/helpers/env.mjs --test \"tests/unit/*.test.mjs\"",
     "check": "node scripts/check-syntax.mjs",
     "prove:server": "node scripts/prove-server.mjs",
     "prove:voice": "node scripts/prove-voice.mjs",

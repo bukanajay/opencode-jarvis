@@ -1,19 +1,19 @@
 // Jarvis brain: LangGraph loop, OpenCode session as the reasoner.
-// Nodes: recall → think → act → persist. The brain session is read-only
-// (READONLY_PERMISSIONS): it may read the project to answer, never change it. Luna default, switchable via the OpenCode
-// model list (JARVIS_BRAIN_MODEL or setBrainModel). No new provider keys.
+// Nodes: recall → think → act → persist. One brain session per project, each
+// read-only (READONLY_PERMISSIONS): it may read the project to answer, never
+// change it. Luna default, switchable via the OpenCode model list
+// (JARVIS_BRAIN_MODEL or setBrainModel). No new provider keys.
 import { StateGraph, Annotation } from "@langchain/langgraph";
-import fs from "node:fs";
-import path from "node:path";
 import { ensureClient } from "../service.js";
 import { runTurn, isQuotaError, READONLY_PERMISSIONS, BRAIN_AGENT } from "../turn.js";
 import { getFleetRegistry } from "../autoroute.js";
 import { JARVIS_MODEL, JARVIS_FALLBACK_MODEL, parseModelRef } from "../sessions.js";
-import { loadMemory, remember, recall, extractCandidates } from "./memory.js";
+import { loadMemory, saveMemory, remember, extractCandidates, loadProjectMemory, recallAll, extractProjectCandidates } from "./memory.js";
+import { projectDir, projectName } from "../project.js";
 import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
 
-let brainSessionID = null;
+const brainSessions = new Map(); // directory -> sessionID
 let brainModelUsed = null;
 let compiled = null;
 
@@ -36,10 +36,9 @@ export async function setBrainModel(providerID, id) {
   if (!ok) throw new Error(`unknown model: ${providerID}/${id}`);
   const mem = loadMemory();
   mem.preferences.brainModel = { providerID, id };
-  fs.mkdirSync(path.dirname(mem.file), { recursive: true });
-  fs.writeFileSync(mem.file, JSON.stringify({ facts: mem.facts, preferences: mem.preferences }, null, 2));
-  if (brainSessionID) {
-    await client.session.switchModel({ sessionID: brainSessionID, model: { providerID, id } });
+  saveMemory(mem);
+  for (const sessionID of brainSessions.values()) {
+    await client.session.switchModel({ sessionID, model: { providerID, id } });
   }
   brainModelUsed = { providerID, id };
   return brainModelUsed;
@@ -54,14 +53,13 @@ async function createBrainSession(directory, model) {
     title: "jarvis brain",
     permissions: READONLY_PERMISSIONS,
   });
-  brainSessionID = session.id;
+  brainSessions.set(directory, session.id);
   brainModelUsed = model;
-  return brainSessionID;
+  return session.id;
 }
 
-export async function ensureBrainSession(directory) {
-  if (brainSessionID) return brainSessionID;
-  return createBrainSession(directory, wantedBrainModel());
+export async function ensureBrainSession(directory = projectDir()) {
+  return brainSessions.get(directory) ?? createBrainSession(directory, wantedBrainModel());
 }
 
 const BrainState = Annotation.Root({
@@ -150,24 +148,26 @@ export function fencedFilter(forward) {
   };
 }
 
-export function buildThinkPrompt(text, memories, registry) {
+export function buildThinkPrompt(text, memories, registry, project = null) {
+  const projLine = project?.dir ? `Current project: ${project.name} (${project.dir}). ` : "";
   const memLine = memories.length > 0
     ? `What you remember about the user:\n- ${memories.join("\n- ")}\n` : "";
   const fleetLine = (registry ?? []).length > 0
     ? `Fleet agents you can delegate to: ${(registry ?? []).map((a) => `${a.id}${a.description ? ` (${a.description.slice(0, 80)})` : ""}`).join("; ")}. Omit "agent" to let routing decide.\n`
     : `No fleet agents exist yet; do not emit dispatch fences, say what you need instead.\n`;
-  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
+  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
 }
 
 // One streamed turn on the brain session, fences held back from the stream.
 // Quota/rate-limit failures retry once on the fallback model.
 async function brainTurn(prompt, onDelta, files) {
-  const sessionID = await ensureBrainSession(process.cwd());
+  const directory = projectDir();
+  const sessionID = await ensureBrainSession(directory);
   const filter = fencedFilter((d) => onDelta?.(d));
   const turn = (sid) => runTurn(sid, prompt, { onDelta: (d) => filter.push(d), files });
   let r = await turn(sessionID);
   if (r.status === "failed" && isQuotaError(r.error)) {
-    r = await turn(await createBrainSession(process.cwd(), JARVIS_FALLBACK_MODEL));
+    r = await turn(await createBrainSession(directory, JARVIS_FALLBACK_MODEL));
   }
   filter.flush();
   return r;
@@ -186,13 +186,12 @@ export function serialize(fn) {
 function buildGraph(handlers) {
   const g = new StateGraph(BrainState);
   g.addNode("recall", async (state) => {
-    const mem = loadMemory();
-    return { memories: (await recall(mem, state.text)).map((f) => f.text) };
+    return { memories: (await recallAll(state.text)).map((f) => f.text) };
   });
   g.addNode("think", async (state) => {
     const { client } = await ensureClient();
-    const registry = await getFleetRegistry(client, process.cwd()).catch(() => []);
-    const prompt = buildThinkPrompt(state.text, state.memories, registry);
+    const registry = await getFleetRegistry(client, projectDir()).catch(() => []);
+    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() });
     const r = await brainTurn(prompt, handlers.onDelta, state.files);
     return { reply: r.text, status: r.status };
   });
@@ -205,9 +204,12 @@ function buildGraph(handlers) {
     return { reply: stripDispatches(state.reply), dispatches, warnings };
   });
   g.addNode("persist", async (state) => {
-    const mem = loadMemory();
+    // "remember for this project …" goes to project memory; everything else
+    // the heuristics catch is about the user and stays global.
     const saved = [];
-    for (const c of extractCandidates(state.text)) {
+    const projectFacts = extractProjectCandidates(state.text);
+    const mem = projectFacts.length ? loadProjectMemory() : loadMemory();
+    for (const c of projectFacts.length ? projectFacts : extractCandidates(state.text)) {
       const f = remember(mem, c, ["auto"]);
       if (f) saved.push(f.text);
     }
@@ -254,8 +256,8 @@ export function brainReview(report, onDelta) {
   return serialize(async () => {
     const { client } = await ensureClient();
     const [memories, registry] = await Promise.all([
-      recall(loadMemory(), report.task).then((fs) => fs.map((f) => f.text)).catch(() => []),
-      getFleetRegistry(client, process.cwd()).catch(() => []),
+      recallAll(report.task).then((fs) => fs.map((f) => f.text)).catch(() => []),
+      getFleetRegistry(client, projectDir()).catch(() => []),
     ]);
     const r = await brainTurn(buildReviewPrompt(report, { memories, registry }), onDelta);
     if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [] };

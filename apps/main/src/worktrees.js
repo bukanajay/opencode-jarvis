@@ -8,8 +8,32 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { readProjectState, writeProjectState } from "./project.js";
 
 export const chains = new Map(); // chainID -> { chainID, repo, base, branch, directory, state }
+
+// Open chains are saved in the owning project's state.json so a restart can
+// still land, keep or discard them.
+function persist(project) {
+  if (!project) return;
+  const open = [...chains.values()].filter((c) => c.project === project && c.state === "open");
+  try {
+    writeProjectState({ chains: open }, project);
+  } catch (err) {
+    console.error("saving worktree chains failed:", err?.message ?? err);
+  }
+}
+
+export function loadChains(project) {
+  const saved = readProjectState(project).chains;
+  let n = 0;
+  for (const c of Array.isArray(saved) ? saved : []) {
+    if (!c?.chainID || chains.has(c.chainID) || c.state !== "open" || !fs.existsSync(c.directory ?? "")) continue;
+    chains.set(c.chainID, { ...c, project });
+    n++;
+  }
+  return n;
+}
 
 export function defaultGit(args, cwd) {
   return new Promise((resolve, reject) => {
@@ -54,14 +78,15 @@ export async function createChainWorktree(directory, task, chainID) {
   const dir = path.join(worktreeRoot(), path.basename(repo), `${branchSlug(task)}-${id}`);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   await git(["worktree", "add", "-b", branch, dir, "HEAD"], repo);
-  const chain = { chainID: chainID ?? null, repo, base, branch, directory: dir, state: "open", task: String(task ?? "") };
-  if (chainID) chains.set(chainID, chain);
+  const chain = { chainID: chainID ?? null, project: directory, repo, base, branch, directory: dir, state: "open", task: String(task ?? "") };
+  if (chainID) bindChain(chainID, chain);
   return chain;
 }
 
 export function bindChain(chainID, chain) {
   chain.chainID = chainID;
   chains.set(chainID, chain);
+  persist(chain.project);
   return chain;
 }
 
@@ -110,6 +135,7 @@ export async function landChain(chainID) {
   }
   await removeWorktree(chain, { deleteBranch: true });
   chain.state = "landed";
+  persist(chain.project);
   return { ok: true, action: "land", branch: chain.branch, base: chain.base };
 }
 
@@ -121,6 +147,7 @@ export async function keepChain(chainID) {
   await commitAll(chain, commitMessage(chain));
   await removeWorktree(chain, { deleteBranch: false });
   chain.state = "kept";
+  persist(chain.project);
   return { ok: true, action: "keep", branch: chain.branch };
 }
 
@@ -129,6 +156,7 @@ export async function discardChain(chainID) {
   if (!chain || chain.state !== "open") throw new Error(`discard: no open worktree for ${chainID}`);
   await removeWorktree(chain, { deleteBranch: true });
   chain.state = "discarded";
+  persist(chain.project);
   return { ok: true, action: "discard", branch: chain.branch };
 }
 
