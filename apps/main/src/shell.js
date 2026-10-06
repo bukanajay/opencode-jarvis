@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.defaultAgent"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -24,6 +24,9 @@ export const DEFAULTS = {
   captionSize: "medium",
   audioDevice: "default",
   wake: "jarvis",
+  voiceMode: "off",
+  autoMode: "off",
+  defaultAgent: "build",
 };
 
 export function storePath() {
@@ -58,7 +61,11 @@ const KEY_OF = {
   "set.captionSize": "captionSize",
   "set.audioDevice": "audioDevice",
   "set.wake": "wake",
+  "set.voiceMode": "voiceMode",
+  "set.autoMode": "autoMode",
+  "set.defaultAgent": "defaultAgent",
 };
+export const ON_OFF = ["on", "off"];
 
 function validate(name, args) {
   if (!ALLOWLIST.includes(name)) throw new Error(`not allowlisted: ${name}`);
@@ -80,6 +87,13 @@ function validate(name, args) {
     case "set.audioDevice":
     case "set.wake":
       if (value.length > 64) throw new Error(`${name}: value too long`);
+      break;
+    case "set.voiceMode":
+    case "set.autoMode":
+      if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.defaultAgent":
+      if (!/^[a-z0-9-]{1,48}$/.test(value)) throw new Error(`${name}: bad agent id`);
       break;
   }
   return value;
@@ -129,6 +143,15 @@ export function matchAppCommand(text) {
   }
   if ((m = t.match(/^set wake word to (.+)$/))) {
     return { name: "set.wake", args: { value: m[1].trim() } };
+  }
+  if ((m = t.match(/^(?:turn |set )?voice mode (on|off)$/))) {
+    return { name: "set.voiceMode", args: { value: m[1] } };
+  }
+  if ((m = t.match(/^(?:turn |set )?auto mode (on|off)$/))) {
+    return { name: "set.autoMode", args: { value: m[1] } };
+  }
+  if ((m = t.match(/^set default agent to ([a-z0-9-]+)$/)) || (m = t.match(/^use ([a-z0-9-]+) as default agent$/))) {
+    return { name: "set.defaultAgent", args: { value: m[1] } };
   }
   return null;
 }
