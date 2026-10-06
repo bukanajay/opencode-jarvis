@@ -102,6 +102,41 @@ export async function listModels() {
   return client.model.list();
 }
 
+export async function listProjects() {
+  const { client } = await ensureClient();
+  return client.project.list();
+}
+
+export async function projectIDFor(directory) {
+  const list = await listProjects();
+  const raw = list.data ?? list.projects ?? list;
+  const arr = Array.isArray(raw) ? raw : [];
+  const hit = arr.find((p) => p.canonical === directory);
+  if (!hit) throw new Error(`no project for ${directory}`);
+  return hit.id;
+}
+
+export async function listWorktrees(projectID) {
+  const { client } = await ensureClient();
+  return client.worktree.list({ projectID });
+}
+
+export async function createWorktree(projectID, { from, branch, directory, name } = {}) {
+  const { client } = await ensureClient();
+  return client.worktree.create({ projectID, from, branch, directory, name });
+}
+
+export async function removeWorktree(projectID, directory, force = true) {
+  const { client } = await ensureClient();
+  await client.worktree.remove({ projectID, directory, force });
+  return { ok: true };
+}
+
+export async function compactSession(sessionID) {
+  const { client } = await ensureClient();
+  return client.session.compact({ sessionID });
+}
+
 export async function getDiff(sessionID) {
   const { client } = await ensureClient();
   return client.session.diff({ sessionID });
@@ -269,11 +304,12 @@ export async function spawnWorker(task, opts = {}) {
   const { client } = await ensureClient();
   const parentID = await ensureJarvisSession(process.cwd());
   const model = opts.model ?? resolveWorkerModel();
+  const directory = opts.directory ?? process.cwd();
   const session = await client.session.create({
     parentID,
     agent: opts.agent ?? "build",
     model,
-    location: { directory: process.cwd() },
+    location: { directory },
     title: task.slice(0, 64),
   });
   const w = record(session.id);

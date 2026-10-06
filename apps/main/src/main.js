@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose } from "./terminal.js";
@@ -183,9 +183,9 @@ app.whenReady().then(async () => {
     stopListening();
     return { ok: true };
   });
-  ipcMain.handle("fleet.spawn", async (_e, { task, agent } = {}) => {
+  ipcMain.handle("fleet.spawn", async (_e, { task, agent, directory } = {}) => {
     if (!task || typeof task !== "string") throw new Error("fleet.spawn: task required");
-    const r = await spawnWorker(task, { agent });
+    const r = await spawnWorker(task, { agent, directory });
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     return { ok: true, ...r };
   });
@@ -255,6 +255,12 @@ app.whenReady().then(async () => {
     await client.integration.oauth.cancel({ integrationID, attemptID });
     return { ok: true };
   });
+  ipcMain.handle("project.list", async () => ({ ok: true, projects: await listProjects() }));
+  ipcMain.handle("worktree.here", async () => ({ ok: true, worktrees: await listWorktrees(await projectIDFor(process.cwd())) }));
+  ipcMain.handle("worktree.list", async (_e, { projectID } = {}) => ({ ok: true, worktrees: await listWorktrees(projectID) }));
+  ipcMain.handle("worktree.create", async (_e, args = {}) => ({ ok: true, worktree: await createWorktree(args.projectID, args) }));
+  ipcMain.handle("worktree.remove", async (_e, { projectID, directory } = {}) => removeWorktree(projectID, directory));
+  ipcMain.handle("session.compact", async (_e, { sessionID } = {}) => ({ ok: true, compaction: await compactSession(sessionID) }));
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

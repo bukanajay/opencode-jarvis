@@ -80,6 +80,7 @@
     <button class="ghost" id="work-fork">Fork</button>
     <button class="ghost" id="work-diff">Diff</button>
     <button class="ghost" id="work-undo">Undo last</button>
+    <button class="ghost" id="work-compact">Compact</button>
     <button class="ghost" id="work-back">Back to deck</button></p>
     <div class="tools" id="work-diff"></div>
   </section>
@@ -91,6 +92,12 @@
       <button type="submit">Run</button>
       <button type="button" class="ghost" id="term-kill">Kill</button>
     </form>
+    <form id="proj-f" style="margin-top:8px;">
+      <input id="proj-dir" placeholder="project directory (empty = here)" />
+      <button class="ghost" type="submit">Spawn here</button>
+      <button class="ghost" type="button" id="wt-list">Worktrees</button>
+    </form>
+    <div class="res" id="wt-out"></div>
   </section>
   <p><button class="ghost" id="yard-toggle">Open yard</button></p>
   <section id="mcp">
@@ -381,6 +388,22 @@
     termTimer = setInterval(termPoll, 1000);
   });
   $("term-kill").onclick = async () => { if (termID) { await window.jarvis.termKill(termID); termID = null; clearInterval(termTimer); } };
+  $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); log.textContent += "\n[compacted]\n"; } };
+  // Yard project switch + worktrees.
+  $("proj-f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dir = $("proj-dir").value.trim() || undefined;
+    const task = prompt("Worker task:", "Reply with exactly: proj-ok. No tools.");
+    if (!task) return;
+    await window.jarvis.fleetSpawn(task, dir);
+  });
+  $("wt-list").onclick = async () => {
+    try {
+      const r = await window.jarvis.worktreeHere();
+      const wts = r.worktrees?.data ?? r.worktrees ?? [];
+      $("wt-out").textContent = (Array.isArray(wts) ? wts : []).map((w) => w.directory).join("\n") || "(none)";
+    } catch (e) { $("wt-out").textContent = String(e.message ?? e); }
+  };
   // MCP: status for every server, sign-in by hand when disconnected.
   async function mcpRefresh() {
     try {
