@@ -55,6 +55,13 @@
     <p><button id="allow">Allow once</button><button class="danger" id="deny">Deny</button>
     <span class="res">voice: say “allow” or “deny”</span></p>
   </section>
+  <section id="cfg" style="display:none;border-color:var(--accent);">
+    <h2>Config change — confirm</h2>
+    <div id="cfg-text"></div>
+    <div class="res" id="cfg-rule"></div>
+    <p><button id="cfg-yes">Yes, apply it</button><button class="ghost" id="cfg-no">Discard</button>
+    <span class="res">voice: say “yes, apply it” or “no”</span></p>
+  </section>
   <section id="work">
     <h2>Work view</h2>
     <div id="work-task"></div>
@@ -138,6 +145,24 @@
     renderRing(workers.map((w) => w.id === request.sessionID ? { ...w, state: "permission", pending: request } : w));
   });
   window.jarvis?.onPermissionResolved(() => { $("perm").classList.remove("show"); sndDone(); });
+  // Server-config widening: second confirm, shows the exact rule.
+  window.jarvis?.onConfigPending(({ pending }) => {
+    sndPermission();
+    $("cfg").style.display = "block";
+    $("cfg-text").textContent = pending.summary;
+    $("cfg-rule").textContent = pending.rule?.action ? JSON.stringify(pending.rule) : (pending.target ?? "");
+    $("cfg").dataset.pendingID = pending.pendingID;
+  });
+  const cfgHide = () => { $("cfg").style.display = "none"; };
+  window.jarvis?.onConfigApplied(({ entry, note }) => {
+    cfgHide(); sndDone();
+    log.textContent += `\n[config] ${entry.what} — ${note ?? "live"}\n`;
+    const el = document.getElementById("audit");
+    if (el && entry) el.textContent += `[${new Date(entry.at).toLocaleTimeString()}] ${entry.bucket}: ${entry.what}\n`;
+  });
+  window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
+  $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
+  $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
   window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
   window.jarvis?.onDone(({ modelUsed, status }) => {
     log.textContent += `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;

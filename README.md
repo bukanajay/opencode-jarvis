@@ -79,9 +79,10 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * `apps/main/src/shell.js`: app-owned store (`~/.config/jarvis/shell.json`,
   `JARVIS_SHELL_FILE` override), allowlist `set.accent|density|layout|captionSize|
   audioDevice|wake`, value enums, audit entries `{bucket: shell, live: true}`.
-* `matchAppCommand` is exact and enumerable — 9 phrases incl. `use the amber accent`
-  and `dim the fleet` (→ `set.accent dim`). Widening (`let every agent run any
-  shell command`), model work, and unknown accents never match.
+* `matchAppCommand` is exact and enumerable — 10 phrases incl. `use the amber accent`,
+  `set the theme to amber` (theme is the accent alias), and `dim the fleet`
+  (→ `set.accent dim`). Widening (`let every agent run any shell command`),
+  model work, and unknown accents never match.
 * `routeUtterance` checks app commands before the model path, after the pending
   permission gate. One stale fleet assertion updated: `dim the fleet` is now
   `app.command` even mid-gate, by spec.
@@ -89,3 +90,22 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   fresh store (`persist-ok`), unknown values and non-allowlisted commands rejected
   (`validate-ok`). Deck paints `--accent`/`captionSize` on `settings.applied` and
   keeps the audit log as the settings surface.
+
+## Step 5 Config by voice (done 2026-10-06)
+
+`npm run prove:config` -> `config-ok` (route, write+reload+confirm, dispatch, read-only, widen, discard, cleanup).
+
+* `apps/main/src/config.js`: server-config bucket. `add a read-only reviewer`
+  writes `.opencode/agents/reviewer.md` (watched file, `edit`+`bash` deny) and reads
+  `agent.list`/`get` back before reporting — proven `mode subagent, edit deny`,
+  reload visible in ~20ms. Removal is verified the same way.
+* Exit proven: the reviewer dispatched a real review (`dispatch-ok`), and an explicit
+  edit instruction produced no file (`readonly-ok`).
+* Widening is a stage + second confirm, never silent. `let every agent run any shell
+  command` stages the exact rule `{shell * allow}` on a blocking card; `yes, apply
+  it` applies via saved permission (`effect: allow` returned), `no` discards —
+  proven the discarded session-delete left its worker alive. Voice `allow`/`deny`
+  still belong to the permission gate; config confirms use `yes`/`no`.
+* Model note: free-tier `opencode/*` models reject direct subagent sessions
+  (403 `FreeTierError`), so reviewer dispatches ride `openrouter/apodex`
+  (`REVIEWER_MODEL` override) until Luna quota returns. Luna stays the Jarvis default.

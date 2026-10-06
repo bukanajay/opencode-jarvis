@@ -105,7 +105,8 @@ export function applyAppCommand(store, name, args) {
 
 // Spoken or typed shell phrases. Exact, enumerable — never a model judgment.
 export function matchAppCommand(text) {
-  const t = String(text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  // Deck has one accent; "theme" is its alias ("set the theme to amber" applies).
+  const t = String(text ?? "").trim().toLowerCase().replace(/\s+/g, " ").replace(/\btheme\b/g, "accent");
   let m;
   if (t === "dim the fleet") return { name: "set.accent", args: { value: "dim" } };
   if ((m = t.match(/^(?:use|set)(?: the)? (amber|phosphor|ice|ember|dim)(?: accent)?$/))) {

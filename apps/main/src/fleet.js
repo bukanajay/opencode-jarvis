@@ -3,6 +3,8 @@
 // idle | working | permission | done | failed | stopped
 import { ensureClient } from "./service.js";
 import { ensureJarvisSession, parseModelRef, JARVIS_MODEL } from "./sessions.js";
+import { matchAppCommand } from "./shell.js";
+import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -173,17 +175,22 @@ export function latestActiveWorker() {
   return order.find((w) => w.state === "working" || w.state === "permission" || w.state === "idle") ?? null;
 }
 
-import { matchAppCommand } from "./shell.js";
-
 // Pure routing: control phrase vs model prompt. Main decides; flaky transcripts cannot eval.
-export function routeUtterance(text, hasPending = pendingPermissions.size > 0) {
+export function routeUtterance(text, hasPending = pendingPermissions.size > 0, hasConfigPending = pendingConfigs.size > 0) {
   const t = String(text ?? "").trim().toLowerCase();
   if (hasPending) {
     if (/^(allow|yes|approve|grant)(\s+once)?$/.test(t)) return { route: "permission", decision: "allow" };
     if (/^(deny|no|reject|block)$/.test(t)) return { route: "permission", decision: "deny" };
   }
+  if (hasConfigPending) {
+    if (/^(yes,? apply it|yes|confirm|apply it|do it)$/.test(t)) return { route: "config.confirm", confirmed: true };
+    if (/^(no|cancel|never mind|don't|do not)$/.test(t)) return { route: "config.confirm", confirmed: false };
+  }
   const app = matchAppCommand(text);
   if (app) return { route: "app.command", ...app };
+  const cfg = matchConfigCommand(text);
+  if (cfg && !isWidening(cfg)) return { route: "config.apply", spec: cfg };
+  if (cfg && isWidening(cfg)) return { route: "config.stage", spec: cfg };
   if (/^stop( the)? worker$/.test(t)) return { route: "stop-worker" };
   return { route: "prompt" };
 }

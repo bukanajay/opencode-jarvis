@@ -6,9 +6,33 @@ import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
+import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 
 let shell = null;
 const shellStore = () => (shell ??= loadStore());
+
+const latestConfigPending = () => [...pendingConfigs.keys()].pop() ?? null;
+const publicPending = (s) => ({ pendingID: s.pendingID, kind: s.kind, summary: s.summary, rule: { action: s.action, resources: s.resources, effect: s.effect } });
+const withDeleteTarget = (spec) => ({ ...spec, target: latestActiveWorker()?.sessionID ?? null });
+const widenHooks = () => ({
+  jarvisSessionID: async () => ensureJarvisSession(process.cwd()),
+  resolveTarget: async (staged) => staged.target ?? latestActiveWorker()?.sessionID ?? null,
+  deleteTarget: async (id) => deleteWorker(id),
+});
+function configAudit(kind, r) {
+  return {
+    at: Date.now(),
+    bucket: "server-config",
+    what: r.summary ?? `${kind} ${r.name ?? r.target ?? ""}`.trim(),
+    live: r.needsRestart !== true,
+    needsRestart: r.needsRestart === true,
+    note: r.note ?? (r.applied === false ? "discarded, nothing written" : "server reloaded"),
+  };
+}
+function broadcastConfig(r) {
+  const entry = configAudit(r.summary?.startsWith("Allow") ? "permission-allow-rule" : "config", r);
+  broadcast({ kind: r.applied === false ? "config.discarded" : "config.applied", entry, ...r });
+}
 
 
 async function answerPending(decision) {
@@ -50,6 +74,28 @@ app.whenReady().then(async () => {
     if (routed.route === "permission") {
       const r = await answerPending(routed.decision);
       return { ok: true, control: "permission", ...r };
+    }
+    if (routed.route === "config.confirm") {
+      const r = await confirmWidening(
+        (await ensureClient()).client,
+        process.cwd(),
+        latestConfigPending(),
+        routed.confirmed,
+        widenHooks(),
+      );
+      broadcastConfig(r);
+      return { ok: true, control: "config.confirm", ...r };
+    }
+    if (routed.route === "config.apply") {
+      const r = await applyAgentFile((await ensureClient()).client, process.cwd(), routed.spec);
+      const entry = configAudit("agent-file", r);
+      broadcast({ kind: "config.applied", entry, agent: r.name, note: r.note });
+      return { ok: true, control: "config.apply", ...r };
+    }
+    if (routed.route === "config.stage") {
+      const staged = stageWidening(routed.spec.kind === "session-delete" ? withDeleteTarget(routed.spec) : routed.spec);
+      broadcast({ kind: "config.pending", pending: publicPending(staged) });
+      return { ok: true, control: "config.stage", pendingID: staged.pendingID };
     }
     if (routed.route === "stop-worker") {
       const w = latestActiveWorker();
@@ -138,6 +184,16 @@ app.whenReady().then(async () => {
     settings: shellStore().settings,
     audit: shellStore().audit,
     accents: ACCENTS,
+  }));
+  ipcMain.handle("config.confirm", async (_e, { pendingID, confirmed } = {}) => {
+    if (!pendingID || typeof confirmed !== "boolean") throw new Error("config.confirm: pendingID + confirmed required");
+    const r = await confirmWidening((await ensureClient()).client, process.cwd(), pendingID, confirmed, widenHooks());
+    broadcastConfig(r);
+    return { ok: true, ...r };
+  });
+  ipcMain.handle("config.pending", async () => ({
+    ok: true,
+    pending: [...pendingConfigs.values()].map(publicPending),
   }));
   await createWindow();
 });

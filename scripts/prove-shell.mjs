@@ -21,6 +21,7 @@ const shellCases = [
   ["set caption size to large", "set.captionSize", "large"],
   ["set audio device to headset", "set.audioDevice", "headset"],
   ["set wake word to computer", "set.wake", "computer"],
+  ["set the theme to amber", "set.accent", "amber"],
 ];
 for (const [text, name, value] of shellCases) {
   const r = routeUtterance(text, false);
@@ -32,7 +33,6 @@ for (const [text, name, value] of shellCases) {
 const promptCases = [
   "make a reviewer that cannot edit, then have it look at auth",
   "let every agent run any shell command",
-  "set the theme to amber",
   "use the invisible accent",
   "allow",
 ];
@@ -40,7 +40,7 @@ for (const text of promptCases) {
   const r = routeUtterance(text, false);
   if (r.route === "app.command") throw new Error(`eval leak: ${JSON.stringify(text)} routed to ${r.name}`);
 }
-console.log("route-ok: 9 shell phrases local, 5 non-shell stay model-side");
+console.log("route-ok: 10 shell phrases local, 4 non-shell stay model-side");
 
 // 2. Apply amber: live before the next frame (synchronous, in-memory + file).
 let store = loadStore();
