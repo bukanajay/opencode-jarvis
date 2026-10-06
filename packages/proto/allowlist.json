@@ -1,0 +1,10 @@
+{
+  "allowlist": [
+    "set.accent",
+    "set.density",
+    "set.layout",
+    "set.captionSize",
+    "set.audioDevice",
+    "set.wake"
+  ]
+}

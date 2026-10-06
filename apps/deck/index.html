@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis Deck — Loop</title>
+<style>
+  body { background:#060809; color:#e8f0ee; font-family: system-ui, sans-serif; margin:0; }
+  main { max-width: 760px; margin: 48px auto; padding: 0 20px; }
+  #log { white-space: pre-wrap; border:1px solid #1d2a28; padding:12px; min-height:220px; }
+  form { display:flex; gap:8px; margin-top:12px; }
+  input { flex:1; padding:10px; background:#0b1110; color:#e8f0ee; border:1px solid #1d2a28; }
+  button { padding:10px 16px; background:#c8f04a; border:0; font-weight:700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Jarvis — Loop</h1>
+  <div id="log"></div>
+  <form id="f"><input id="q" placeholder="Type a prompt to Jarvis (Luna)" /><button>Send</button></form>
+</main>
+<script>
+  const log = document.getElementById("log");
+  const f = document.getElementById("f");
+  const q = document.getElementById("q");
+  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = q.value.trim();
+    if (!text) return;
+    q.value = "";
+    log.textContent += "\n> " + text + "\n";
+    await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() });
+  });
+</script>
+</body>
+</html>

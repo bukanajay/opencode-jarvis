@@ -1,0 +1,13 @@
+{
+  "name": "@jarvis/main",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "@opencode/client": "2.0.24",
+    "electron": "44.5.1"
+  }
+}

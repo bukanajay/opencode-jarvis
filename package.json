@@ -1,0 +1,16 @@
+{
+  "name": "jarvis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "prove:server": "node scripts/prove-server.mjs",
+    "dev:main": "npm --workspace apps/main run dev",
+    "dev:deck": "npm --workspace apps/deck run dev"
+  }
+}
