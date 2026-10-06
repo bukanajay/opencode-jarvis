@@ -93,3 +93,26 @@ test("serialize: brain turns never overlap and errors do not jam the queue", asy
   assert.equal(await fast, 7);
   assert.deepEqual(order, ["a:start", "a:end", "b", "c"]);
 });
+
+test("buildReviewPrompt: open worktree is named with land/keep/discard hints", () => {
+  const r = buildReport({ sessionID: "ses_1", task: "t" }, { worktree: { state: "open", branch: "jarvis/t-1", base: "main", directory: "/wt/t-1" } });
+  const p = buildReviewPrompt(r);
+  assert.match(p, /branch jarvis\/t-1 in worktree \/wt\/t-1/);
+  assert.match(p, /"land it"/);
+  const closed = buildReport({ sessionID: "ses_1", task: "t" }, { worktree: { state: "landed", branch: "b" } });
+  assert.equal(closed.worktree, null);
+});
+
+test("patchExcerpt: budgeted, clipped, notes omissions", async () => {
+  const { patchExcerpt } = await import("../../apps/main/src/brain/report.js");
+  const diff = [
+    { file: "a", patch: "+a\n" },
+    { file: "b", patch: "x".repeat(5000) },
+    { file: "c", patch: "y".repeat(5000) },
+  ];
+  const out = patchExcerpt(diff, 2700);
+  assert.ok(out.startsWith("+a\n"));
+  assert.match(out, /more chars\]/);
+  assert.match(out, /1 more file patch\(es\) omitted/);
+  assert.equal(patchExcerpt([]), "");
+});

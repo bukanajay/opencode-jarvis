@@ -55,3 +55,17 @@ test("parseModelRef: provider/id with slashes in the id", () => {
   assert.equal(parseModelRef("nope"), null);
   assert.equal(parseModelRef(null), null);
 });
+
+test("routeUtterance: land / keep / discard chain controls", () => {
+  assert.deepEqual(routeUtterance("land it", false, false), { route: "chain.action", action: "land" });
+  assert.deepEqual(routeUtterance("merge the changes", false, false), { route: "chain.action", action: "land" });
+  assert.deepEqual(routeUtterance("keep the branch", false, false), { route: "chain.action", action: "keep" });
+  assert.deepEqual(routeUtterance("Discard", false, false), { route: "chain.action", action: "discard" });
+  assert.equal(routeUtterance("discard the old parser code", false, false).route, "prompt");
+});
+
+test("matchAppCommand: isolation and review mode", () => {
+  assert.deepEqual(matchAppCommand("work in my checkout"), { name: "set.isolation", args: { value: "shared" } });
+  assert.deepEqual(matchAppCommand("set isolation to worktree"), { name: "set.isolation", args: { value: "worktree" } });
+  assert.deepEqual(matchAppCommand("turn review mode off"), { name: "set.reviewMode", args: { value: "off" } });
+});

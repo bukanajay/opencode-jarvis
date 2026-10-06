@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -27,6 +27,7 @@ export const DEFAULTS = {
   voiceMode: "off",
   autoMode: "off",
   reviewMode: "on",
+  isolation: "worktree",
   defaultAgent: "build",
   jarvisModel: "opencode-go/gpt-6-luna",
   workerModel: "opencode/fledge-alpha-free",
@@ -67,11 +68,13 @@ const KEY_OF = {
   "set.voiceMode": "voiceMode",
   "set.autoMode": "autoMode",
   "set.reviewMode": "reviewMode",
+  "set.isolation": "isolation",
   "set.defaultAgent": "defaultAgent",
   "set.jarvisModel": "jarvisModel",
   "set.workerModel": "workerModel",
 };
 export const ON_OFF = ["on", "off"];
+export const ISOLATIONS = ["worktree", "shared"];
 
 function validate(name, args) {
   if (!ALLOWLIST.includes(name)) throw new Error(`not allowlisted: ${name}`);
@@ -98,6 +101,9 @@ function validate(name, args) {
     case "set.autoMode":
     case "set.reviewMode":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.isolation":
+      if (!ISOLATIONS.includes(value)) throw new Error(`${name}: want worktree|shared`);
       break;
     case "set.defaultAgent":
       if (!/^[a-z0-9-]{1,48}$/.test(value)) throw new Error(`${name}: bad agent id`);
@@ -164,6 +170,11 @@ export function matchAppCommand(text) {
   if ((m = t.match(/^(?:turn |set )?review mode (on|off)$/))) {
     return { name: "set.reviewMode", args: { value: m[1] } };
   }
+  if ((m = t.match(/^set isolation to (worktree|shared)$/))) {
+    return { name: "set.isolation", args: { value: m[1] } };
+  }
+  if (t === "use worktrees") return { name: "set.isolation", args: { value: "worktree" } };
+  if (t === "work in my checkout") return { name: "set.isolation", args: { value: "shared" } };
   if ((m = t.match(/^set default agent to ([a-z0-9-]+)$/)) || (m = t.match(/^use ([a-z0-9-]+) as default agent$/))) {
     return { name: "set.defaultAgent", args: { value: m[1] } };
   }

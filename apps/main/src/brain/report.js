@@ -5,6 +5,7 @@
 export const MAX_ROUNDS = Number(process.env.JARVIS_MAX_ROUNDS ?? 3);
 const FINAL_TEXT_LIMIT = 4000;
 const MAX_FILES = 40;
+const PATCH_BUDGET = 6000;
 
 // Last assistant turn's text (all text parts of the trailing assistant run,
 // so a reply split across tool steps is kept whole). Reasoning and tool parts
@@ -36,12 +37,28 @@ export function summarizeDiff(diff) {
   }));
 }
 
+// Patches in diff order until the budget runs out, each clipped, so the
+// review sees real code even when its read tools cannot reach a worktree.
+export function patchExcerpt(diff, budget = PATCH_BUDGET) {
+  const rows = Array.isArray(diff) ? diff : diff?.data ?? [];
+  const out = [];
+  let left = budget;
+  for (const f of rows) {
+    if (left <= 200 || !f?.patch) continue;
+    const piece = clip(f.patch, Math.min(left, 2500));
+    out.push(piece);
+    left -= piece.length;
+  }
+  const omitted = rows.filter((f) => f?.patch).length - out.length;
+  return out.join("\n") + (omitted > 0 ? `\n…[${omitted} more file patch(es) omitted]` : "");
+}
+
 function clip(s, n) {
   const t = String(s ?? "");
   return t.length > n ? `${t.slice(0, n)}\n…[${t.length - n} more chars]` : t;
 }
 
-export function buildReport(worker, { messages, diff, status, error } = {}) {
+export function buildReport(worker, { messages, diff, status, error, worktree } = {}) {
   const files = summarizeDiff(diff);
   return {
     sessionID: worker.sessionID,
@@ -52,7 +69,9 @@ export function buildReport(worker, { messages, diff, status, error } = {}) {
     status: status ?? "ok",
     error: error ? clip(typeof error === "string" ? error : JSON.stringify(error), 400) : null,
     finalText: clip(finalAssistantText(messages), FINAL_TEXT_LIMIT),
+    patch: patchExcerpt(diff),
     files,
+    worktree: worktree?.state === "open" ? { branch: worktree.branch, base: worktree.base, directory: worktree.directory } : null,
     totals: files.reduce((t, f) => ({ additions: t.additions + f.additions, deletions: t.deletions + f.deletions }), { additions: 0, deletions: 0 }),
   };
 }
@@ -71,6 +90,9 @@ export function buildReviewPrompt(report, { memories = [], registry = [] } = {})
     : "- (no file changes)";
   const memLine = memories.length ? `What you remember about the user:\n- ${memories.join("\n- ")}\n` : "";
   const fleetLine = registry.length ? `Fleet agents: ${registry.map((a) => a.id).join(", ")}.\n` : "";
+  const wtLine = report.worktree
+    ? `The work is isolated on branch ${report.worktree.branch} in worktree ${report.worktree.directory}, not yet in the user's checkout (${report.worktree.base}). Read changed files from that directory. When the chain is done and sound, tell the user they can say "land it" to merge, "keep it" to keep the branch, or "discard it".\n`
+    : "";
   const actions = canFollow
     ? `Decide what happens next:
 - Done and sound: tell the user the outcome in one or two sentences. No fence.
@@ -85,15 +107,17 @@ Task: ${report.task}
 Outcome: ${report.status}${report.error ? ` — ${report.error}` : ""}
 Files changed:
 ${fileLines}
+${wtLine}
 Worker's final message:
 ${report.finalText || "(empty)"}
+${report.patch ? `\nDiff excerpt:\n${report.patch}\n` : ""}
 
 ${actions}`;
 }
 
 // Fetch the trailing messages and diff for a finished worker. Failures to
 // fetch either degrade to an empty field; the report still goes out.
-export async function collectWorkerReport(client, worker, { status, error } = {}) {
+export async function collectWorkerReport(client, worker, { status, error, worktree } = {}) {
   const sessionID = worker.sessionID;
   const [messages, diff] = await Promise.all([
     client.message.list({ sessionID, limit: 30, order: "desc" })
@@ -101,5 +125,5 @@ export async function collectWorkerReport(client, worker, { status, error } = {}
       .catch(() => []),
     client.session.diff({ sessionID }).catch(() => []),
   ]);
-  return buildReport(worker, { messages, diff, status, error });
+  return buildReport(worker, { messages, diff, status, error, worktree });
 }

@@ -6,6 +6,7 @@ import { ensureJarvisSession, parseModelRef, JARVIS_MODEL } from "./sessions.js"
 import { matchAppCommand, loadStore } from "./shell.js";
 import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 import { refreshForms, pendingForms } from "./forms.js";
+import { chains, publicChain } from "./worktrees.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -37,6 +38,8 @@ function workerEvent(sessionID) {
     state: w.state,
     toolCount: w.tools.length,
     round: w.round,
+    chain: w.chain,
+    worktree: publicChain(chains.get(w.chain)),
     pending: w.pending ? { requestID: w.pending.requestID, action: w.pending.action, resources: w.pending.resources } : null,
   };
 }
@@ -433,6 +436,22 @@ export async function replyPermission(requestID, decision) {
   return out;
 }
 
+// Most recent chain with an open worktree whose workers are all finished:
+// the one "land it" / "discard it" means.
+export function latestSettledChain() {
+  for (const w of [...workers.values()].reverse()) {
+    const c = chains.get(w.chain);
+    if (!c || c.state !== "open") continue;
+    const busy = [...workers.values()].some((x) => x.chain === w.chain && ["working", "permission"].includes(x.state));
+    return busy ? { chainID: w.chain, busy: true } : { chainID: w.chain, busy: false };
+  }
+  return null;
+}
+
+export function chainBusy(chainID) {
+  return [...workers.values()].some((x) => x.chain === chainID && ["working", "permission"].includes(x.state));
+}
+
 export function latestActiveWorker() {
   const order = [...workers.values()].reverse();
   return order.find((w) => w.state === "working" || w.state === "permission" || w.state === "idle") ?? null;
@@ -456,5 +475,9 @@ export function routeUtterance(text, hasPending = pendingPermissions.size > 0, h
   if (cfg && !isWidening(cfg)) return { route: "config.apply", spec: cfg };
   if (cfg && isWidening(cfg)) return { route: "config.stage", spec: cfg };
   if (/^stop( the)? worker$/.test(t)) return { route: "stop-worker" };
+  let m;
+  if ((m = t.match(/^(land|merge|keep|discard)( it| the work| the changes| the branch)?$/))) {
+    return { route: "chain.action", action: m[1] === "merge" ? "land" : m[1] };
+  }
   return { route: "prompt" };
 }
