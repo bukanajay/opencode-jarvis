@@ -47,6 +47,17 @@
     text-transform: uppercase; color: var(--dim);
   }
   header .tele b { color: var(--ink); font-weight: 600; }
+  #h-project { position: relative; cursor: pointer; background: none; border: 0; padding: 0; }
+  #h-project:hover b, #h-project:focus-visible b { color: var(--accent); }
+  #project-menu {
+    position: absolute; top: 46px; left: 22px; z-index: 40; min-width: 280px; max-width: min(520px, calc(100vw - 32px));
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; display: none;
+  }
+  #project-menu.show { display: block; }
+  #project-menu button { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--ink); padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  #project-menu button:hover, #project-menu button:focus-visible { background: var(--panel); }
+  #project-menu button small { display: block; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #project-menu button.current { color: var(--accent); }
   header .pulse { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 2.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
   @media (prefers-reduced-motion: reduce) {
@@ -203,12 +214,13 @@
 <body>
 <header>
   <h1>JARVIS<span class="dot">.</span></h1>
-  <span class="tele">primary <b>jarvis</b></span>
+  <button class="tele" id="h-project" title="Switch project" aria-haspopup="menu" aria-expanded="false">project <b id="h-project-name">…</b> ▾</button>
   <span class="tele">model <b id="h-model">luna*</b></span>
   <span class="tele" id="h-state"><span class="pulse"></span> idle</span>
   <span style="flex:1"></span>
   <button class="ghost icon" id="drawer-btn" title="System panels (MCP, audit)" aria-label="Open system panels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
 </header>
+<div id="project-menu" role="menu" aria-label="Projects"></div>
 <main>
   <div class="deck">
     <section>
@@ -262,6 +274,10 @@
     <button class="ghost" id="work-undo">Undo last</button>
     <button class="ghost" id="work-compact">Compact</button>
     <button class="ghost" id="work-back">Close</button></p>
+    <p class="row" id="work-git" style="display:none"><span class="pill" id="work-branch"></span>
+    <button class="ghost" id="work-land" title="Commit and merge this chain's branch into your checkout">Land</button>
+    <button class="ghost" id="work-keep" title="Commit to the branch, remove the worktree, keep the branch">Keep branch</button>
+    <button class="danger" id="work-discard" title="Delete the worktree and branch">Discard</button></p>
   </div>
   </section>
 
@@ -541,6 +557,25 @@
     $("work-files").innerHTML = "";
     $("work-patch").style.display = "none";
     fillAgentModel();
+    renderWorkGit(w);
+  }
+  // Worktree chain controls: only while the chain's worktree is open.
+  function renderWorkGit(w) {
+    const wt = w?.worktree;
+    const open = wt && wt.state === "open";
+    $("work-git").style.display = open ? "" : "none";
+    if (open) $("work-branch").textContent = `${wt.branch} ← ${wt.base}`;
+  }
+  async function workChain(action) {
+    const w = workers.find((x) => x.id === selected);
+    if (!w?.worktree) return;
+    try {
+      const r = await window.jarvis.chainAction(action, w.chain);
+      if (r.ok) addSys(`git · ${action} ${r.branch}${r.base ? ` → ${r.base}` : ""}`);
+      else addSys(`git · ${action} refused: ${r.reason}`, { bad: true });
+    } catch (e) {
+      addSys(`fault · ${action} failed: ${e.message ?? e}`, { bad: true });
+    }
   }
 
   // blocking cards mount here (perm/cfg/frm templates stay as source)
@@ -629,6 +664,7 @@
     if (selected) {
       const w = (snapshot ?? []).find((x) => x.id === selected);
       if (w) $("work-state").textContent = w.pending ? "permission" : (w.state ?? "idle");
+      renderWorkGit(w);
     }
   });
   window.jarvis?.onWorkerStream(({ sessionID, delta }) => {
@@ -722,6 +758,71 @@
     scrollLog();
     if (modelUsed) $("h-model").textContent = `${modelUsed.id}${modelUsed.id === "gpt-6-luna" ? "" : "*"}`;
     (status === "ok" ? sndDone : sndFault)();
+  });
+  // Project switcher: recent projects + open folder. Voice: "switch to project <name>".
+  let projectState = null;
+  function renderProject(p) {
+    projectState = p;
+    $("h-project-name").textContent = p?.name ?? "?";
+    $("h-project").title = p?.dir ? `Project: ${p.dir}` : "Switch project";
+  }
+  function closeProjectMenu() {
+    $("project-menu").classList.remove("show");
+    $("h-project").setAttribute("aria-expanded", "false");
+  }
+  function openProjectMenu() {
+    const menu = $("project-menu");
+    menu.innerHTML = "";
+    const item = (label, sub, fn, current) => {
+      const b = document.createElement("button");
+      b.setAttribute("role", "menuitem");
+      if (current) b.className = "current";
+      b.textContent = label;
+      if (sub) { const sm = document.createElement("small"); sm.textContent = sub; b.appendChild(sm); }
+      b.onclick = async () => {
+        closeProjectMenu();
+        try {
+          const r = await fn();
+          if (r?.ok) addSys(`project · ${r.name}`);
+        } catch (e) {
+          addSys(`fault · project switch failed: ${e.message ?? e}`, { bad: true });
+        }
+      };
+      menu.appendChild(b);
+    };
+    for (const r of projectState?.recent ?? []) {
+      item(r.name, r.dir, () => window.jarvis.projectSet(r.dir), r.dir === projectState?.dir);
+    }
+    item("Open folder…", null, () => window.jarvis.projectOpen());
+    menu.classList.add("show");
+    $("h-project").setAttribute("aria-expanded", "true");
+    menu.querySelector("button")?.focus();
+  }
+  $("h-project").onclick = (e) => {
+    e.stopPropagation();
+    $("project-menu").classList.contains("show") ? closeProjectMenu() : openProjectMenu();
+  };
+  document.addEventListener("click", (e) => { if (!$("project-menu").contains(e.target)) closeProjectMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeProjectMenu(); });
+  window.jarvis?.projectGet?.().then(renderProject).catch(() => {});
+  window.jarvis?.onProjectChanged?.(({ project }) => {
+    renderProject(project);
+    selected = null;
+    $("work").classList.remove("show");
+  });
+
+  // Worker reported back: close any open bubble so Jarvis's review gets its own.
+  window.jarvis?.onWorkerReport(({ report }) => {
+    streamBody = null;
+    streamMeta = null;
+    addSys(`▸ ${report.headline} · ${report.sessionID.slice(0, 8)}${report.round ? ` · round ${report.round}` : ""}`, { bad: report.status !== "ok" });
+    showWorking();
+  });
+  let pumpNoticeAt = 0;
+  window.jarvis?.onFleetPump(({ attempt }) => {
+    if (Date.now() - pumpNoticeAt < 30000) return;
+    pumpNoticeAt = Date.now();
+    addSys(`fleet event stream lost — reconnecting (attempt ${attempt})`, { bad: true });
   });
   window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
   window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; addYou(text, { name: "You · speech" }); });
@@ -1003,6 +1104,9 @@
     if ($("tab-diff").classList.contains("active")) loadWorkDiff();
   };
   $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); addSys("compacted"); } };
+  $("work-land").onclick = () => workChain("land");
+  $("work-keep").onclick = () => workChain("keep");
+  $("work-discard").onclick = () => workChain("discard");
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work-x").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work").addEventListener("click", (e) => { if (e.target === $("work")) { selected = null; $("work").classList.remove("show"); } });

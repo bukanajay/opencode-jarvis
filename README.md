@@ -42,8 +42,10 @@ Main decides control-phrase vs model-prompt, so a flaky transcript can never eva
 `apps/main/src/brain/` — a LangGraph loop (`recall → think → act → persist`)
 with the OpenCode session as its reasoner:
 
-- **Memory** — local long-term store (`~/.config/jarvis/memory.json`). Local-embedding first (MiniLM/ONNX, no keys, runs offline), BM25 fallback. Heuristic fact extraction.
+- **Memory** — local long-term store: global (`~/.config/jarvis/memory.json`) plus per project (`remember for this project that …`); recall searches both, project facts first. Local-embedding first (MiniLM/ONNX, no keys, runs offline), BM25 fallback. Heuristic fact extraction.
+- **Read-only** — the brain runs on the `plan` agent with edit/write/bash/task denied (`JARVIS_BRAIN_AGENT` to change). It reads the project itself to answer code questions; anything that changes or runs code is delegated. Stray permission asks are auto-rejected, never left hanging.
 - **Act** — think emits single-line `dispatch {"task", "agent?"}` fences. Only exact-shape JSON executes; everything else is words. Every intent runs through autoroute + the bootstrap gate, then spawns.
+- **Review loop** — when a worker finishes, Jarvis gets its final message, changed files and a diff excerpt, reviews the outcome in the chat, and takes at most one next step: a `followup {"task"}` to the same worker (e.g. "run the tests") or a new dispatch (e.g. a reviewer). Bounded to `JARVIS_MAX_ROUNDS` (3) per chain; `turn review mode off` disables it.
 - **Model** — Luna default, switchable in Settings → Models (validated against the server list, live-switches before saving). `JARVIS_BRAIN_MODEL` env still wins for scripts.
 
 ## Voice
@@ -58,13 +60,25 @@ Workers are child sessions under Jarvis, shown on the ring: glowing while tools 
 - **Empty fleet?** Spawning with no agents opens a staged gate (purpose → provider → model → effort → confirm) instead of failing, then runs your task on the new agent.
 - **Routing** — `@agent` / `ask X to` explicit forms; auto mode picks by keyword overlap with a visible reason; otherwise the default agent (`build`, changeable).
 
+## Projects and worktrees
+
+- **Projects** — the header shows the current project; click it for recent projects or *Open folder…*, or say `switch to project <name>`. Each project has its own brain session (so OpenCode loads that project's `AGENTS.md`/config), memory, and worker parent session. Workers and open worktrees are rebuilt from the server after a restart.
+- **Worktrees** — each new delegation chain runs on its own branch (`jarvis/<task>-<id>`) in its own git worktree under `~/.config/jarvis/worktrees`, so parallel workers never share a tree and your checkout is untouched. Follow-ups and reviewer dispatches in the chain reuse it. When it's done: `land it` (commit + `merge --no-ff` into your branch; refuses a dirty checkout or a conflict), `keep it` (commit, keep the branch for a PR), or `discard it` — or the buttons in the work view. `work in my checkout` turns isolation off; non-git folders always run shared.
+
 ## Settings
 
-Under the gear icon → system drawer. Models (Jarvis / Fleet / Default agent, all validated live), MCP status, and the audit log of everything Jarvis changed. Shell settings (`~/.config/jarvis/shell.json`) apply next frame and survive restart: accent, density, layout, caption size, audio device, wake word, voice/auto mode.
+Under the gear icon → system drawer. Models (Jarvis / Fleet / Default agent, all validated live), MCP status, and the audit log of everything Jarvis changed. Shell settings (`~/.config/jarvis/shell.json`) apply next frame and survive restart: accent, density, layout, caption size, audio device, wake word, voice/auto/review mode, isolation (worktree/shared).
 
 ## Verify
 
-Every capability has a proof script, each proven live against the shared server:
+Unit tests (no server, no model; run in CI on every push and PR):
+
+```sh
+npm test        # node --test over routing, dispatch/review parsing, fleet events, memory, worktrees
+npm run check   # parse-check every module and the deck script
+```
+
+Every capability also has a live proof script against the shared server:
 
 ```sh
 npm run prove:server   # loop      npm run prove:diff      # diff/undo/redo
@@ -81,13 +95,15 @@ npm run prove:audio    # M5-ready  npm run prove:sessions  # sessions
 ## Project layout
 
 ```text
-apps/main/src/      service, sessions, fleet, audio, shell, config, forms,
-                    terminal, voice, bootstrap, autoroute, brain/
+apps/main/src/      service, sessions, turn, project, worktrees, fleet, audio,
+                    shell, config, forms, terminal, voice, bootstrap,
+                    autoroute, brain/ (brain, memory, report)
 apps/deck/          canvas fleet, chat transcript, work-view popup, drawer
 apps/audio-*/       speech-analyzer (Intel) + parakeet (M5) helpers
 plugins/jarvis/     jarvis RPC contract (dispatchWorker, workerList)
 packages/proto/     Utterance / intent / event types, app-command allowlist
 scripts/prove-*.mjs live proofs, one per capability
+tests/unit/         node --test unit tests (fake client, temp git repos)
 ```
 
 ## Status

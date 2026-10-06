@@ -1,9 +1,9 @@
 import { ensureClient } from "./service.js";
+import { runTurn, isQuotaError, READONLY_PERMISSIONS, BRAIN_AGENT } from "./turn.js";
+import { projectDir, readProjectState, writeProjectState } from "./project.js";
 
 export const JARVIS_MODEL = { providerID: "opencode-go", id: "gpt-6-luna" };
 export const JARVIS_FALLBACK_MODEL = { providerID: "opencode", id: "fledge-alpha-free" };
-let jarvisSessionID = null;
-let jarvisModelUsed = null;
 
 export function parseModelRef(ref) {
   if (!ref) return null;
@@ -12,80 +12,61 @@ export function parseModelRef(ref) {
   return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1) };
 }
 
-export async function ensureJarvisSession(directory, model) {
+// Worker parent ("jarvis") session, one per project. Its id is persisted in
+// the project's state so workers spawned before a restart are still found
+// (and rehydrated) as its children.
+const parentSessions = new Map(); // directory -> sessionID
+
+export async function ensureJarvisSession(directory = projectDir(), model) {
+  if (parentSessions.has(directory)) return parentSessions.get(directory);
   const { client } = await ensureClient();
-  if (jarvisSessionID) return jarvisSessionID;
+  const saved = readProjectState(directory).parentSessionID;
+  if (saved) {
+    const info = await client.session.get({ sessionID: saved }).catch(() => null);
+    if (info?.id === saved && !info.time?.archived) {
+      parentSessions.set(directory, saved);
+      return saved;
+    }
+  }
   const m = model ?? parseModelRef(process.env.JARVIS_MODEL) ?? JARVIS_MODEL;
   const session = await client.session.create({
     agent: "build",
     model: m,
     location: { directory },
+    title: "jarvis",
   });
-  jarvisSessionID = session.id;
-  jarvisModelUsed = m;
-  return jarvisSessionID;
+  parentSessions.set(directory, session.id);
+  writeProjectState({ parentSessionID: session.id }, directory);
+  return session.id;
 }
 
-function sessionOf(ev, sessionID) {
-  const d = ev.data ?? {};
-  return d.sessionID === sessionID ? d : null;
+// Direct fallback when the brain graph fails: one read-only turn on its own
+// session. Never on the worker parent session, which runs the build agent.
+const directSessions = new Map(); // directory -> { id, model }
+
+async function createDirectSession(directory, model) {
+  const { client } = await ensureClient();
+  const session = await client.session.create({
+    agent: BRAIN_AGENT,
+    model,
+    location: { directory },
+    title: "jarvis direct",
+    permissions: READONLY_PERMISSIONS,
+  });
+  directSessions.set(directory, { id: session.id, model });
+  return session.id;
 }
 
 export async function promptJarvis(text, onDelta, opts = {}) {
-  const { client } = await ensureClient();
+  const directory = opts.directory ?? projectDir();
   const wanted = opts.model ?? parseModelRef(process.env.JARVIS_MODEL) ?? JARVIS_MODEL;
-  let sessionID = await ensureJarvisSession(process.cwd(), wanted);
-  const runOnce = (sid) =>
-    new Promise(async (resolve, reject) => {
-      const sub = client.event.subscribe();
-      let full = "";
-      const timer = setTimeout(() => resolve({ status: "timeout", text: full }), opts.timeoutMs ?? 60000);
-      (async () => {
-        for await (const ev of sub) {
-          const d = sessionOf(ev, sid);
-          if (!d) continue;
-          if (ev.type === "session.text.delta" && d.delta) {
-            const chunk = typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
-            full += chunk;
-            if (onDelta) onDelta(chunk);
-          }
-          if (ev.type === "session.execution.succeeded") {
-            clearTimeout(timer);
-            if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-            resolve({ status: "ok", text: full });
-            break;
-          }
-          if (ev.type === "session.execution.failed") {
-            clearTimeout(timer);
-            if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-            resolve({ status: "failed", text: full, error: d.error });
-            break;
-          }
-        }
-      })().catch(reject);
-      try {
-        await client.session.prompt(opts.files?.length ? { sessionID: sid, text, files: opts.files } : { sessionID: sid, text });
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-
-  let r = await runOnce(sessionID);
-  let modelUsed = jarvisModelUsed;
-  const quota = r.status === "failed" && JSON.stringify(r.error ?? "").match(/quota|rate-limit|429/i);
-  if (quota && (wanted.providerID !== JARVIS_FALLBACK_MODEL.providerID || wanted.id !== JARVIS_FALLBACK_MODEL.id)) {
-    const { client: c2 } = await ensureClient();
-    const s2 = await c2.session.create({
-      agent: "build",
-      model: JARVIS_FALLBACK_MODEL,
-      location: { directory: process.cwd() },
-    });
-    jarvisSessionID = s2.id;
-    jarvisModelUsed = JARVIS_FALLBACK_MODEL;
-    sessionID = s2.id;
-    modelUsed = JARVIS_FALLBACK_MODEL;
-    r = await runOnce(sessionID);
+  let sessionID = directSessions.get(directory)?.id ?? (await createDirectSession(directory, wanted));
+  const turn = (sid) => runTurn(sid, text, { onDelta, timeoutMs: opts.timeoutMs, files: opts.files });
+  let r = await turn(sessionID);
+  const isFallback = wanted.providerID === JARVIS_FALLBACK_MODEL.providerID && wanted.id === JARVIS_FALLBACK_MODEL.id;
+  if (r.status === "failed" && isQuotaError(r.error) && !isFallback) {
+    sessionID = await createDirectSession(directory, JARVIS_FALLBACK_MODEL);
+    r = await turn(sessionID);
   }
-  return { sessionID, modelUsed, ...r };
+  return { sessionID, modelUsed: directSessions.get(directory)?.model ?? wanted, ...r };
 }
