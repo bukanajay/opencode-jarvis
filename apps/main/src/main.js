@@ -58,15 +58,19 @@ let voiceSuspend = false;
 async function voiceLoop(commitText, win) {
   if (voiceRunning) return;
   voiceRunning = true;
+  let failures = 0;
   try {
     while (isVoiceMode(shellStore())) {
       if (voiceSuspend || isListening()) { await sleep(500); continue; }
       let fin;
       try {
         fin = await listenOnce({ onPartial: (p) => win?.webContents.send("caption.partial", p) });
+        failures = 0;
       } catch (err) {
+        // Back off on repeated spawn failures (e.g. mic denied) instead of hot-looping.
+        failures += 1;
         win?.webContents.send("audio.error", { message: String(err.message ?? err) });
-        await sleep(1500);
+        await sleep(Math.min(30000, 1500 * 2 ** Math.min(failures, 4)));
         continue;
       }
       const s = shellStore().settings;

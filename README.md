@@ -196,6 +196,9 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   validated against registry + builtins; auto on picks by keyword overlap with
   visible reason (`review->reviewer (3 hits)`), ties/empty fall back to
   `set.defaultAgent` (default `build`). Deck agent select preselects the default.
-* Kept decisions: new-agent permissions default allow (flagged narrower later);
-  `@build` stays valid explicit; bootstrap `yes` loses ties to permission/config
-  confirms by existing route order.
+* Kept decisions: new-agent permissions default to ask (the gate arbitrates each
+  edit/shell call instead of silent allow); `@build` stays valid explicit;
+  bootstrap `yes` loses ties to permission/config confirms by existing route order.
+* Recall is BM25-lite (idf + length norm, no deps). Real embeddings still need a
+  provider and stay a later slice. Voice loop backs off (1.5s → 30s cap) on
+  repeated mic failures instead of hot-looping.

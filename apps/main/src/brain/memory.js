@@ -50,10 +50,26 @@ export function forget(mem, id) {
 }
 
 export function recall(mem, query, limit = 5) {
-  const q = new Set(words(query));
-  if (q.size === 0) return [];
+  const q = words(query);
+  if (q.length === 0) return [];
+  const docs = mem.facts.map((f) => words(f.text));
+  // BM25-lite: idf-weighted overlap with length norm. No deps, no embeddings.
+  const df = new Map();
+  for (const d of docs) for (const w of new Set(d)) df.set(w, (df.get(w) ?? 0) + 1);
+  const N = Math.max(docs.length, 1);
+  const avgLen = docs.reduce((n, d) => n + d.length, 0) / N || 1;
   return mem.facts
-    .map((f) => ({ fact: f, score: words(f.text).filter((w) => q.has(w)).length }))
+    .map((f, i) => {
+      const d = docs[i];
+      let score = 0;
+      for (const w of new Set(q)) {
+        const tf = d.filter((x) => x === w).length;
+        if (!tf) continue;
+        const idf = Math.log(1 + N / (df.get(w) ?? N));
+        score += idf * (tf / (tf + 0.75 * (0.25 + 0.75 * (d.length / avgLen))));
+      }
+      return { fact: f, score };
+    })
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score || b.fact.at - a.fact.at)
     .slice(0, limit)

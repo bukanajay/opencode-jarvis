@@ -56,7 +56,7 @@ s = await boot.answerCreate(c1, "huge", ctx);
 eq(s.stage, "effort", "bad effort rejected");
 s = await boot.answerCreate(c1, "medium", ctx);
 eq(s.stage, "confirm", "effort -> confirm");
-eq(s.spec, { name: "api-tester-probe", provider: "openrouter", model: "x/y:free", effort: "medium", permissions: { edit: "allow", bash: "allow" } }, "confirm shows exact spec");
+eq(s.spec, { name: "api-tester-probe", provider: "openrouter", model: "x/y:free", effort: "medium", permissions: { edit: "ask", bash: "ask" } }, "confirm shows exact spec");
 console.log("machine-ok: purpose->provider->model->effort->confirm, bad inputs rejected");
 
 s = await boot.answerCreate(c1, "maybe-later", ctx);

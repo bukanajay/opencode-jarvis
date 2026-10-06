@@ -9,7 +9,7 @@ export const BUILTINS = ["build", "plan", "general", "explore", "scout", "compac
 
 export const EFFORTS = { low: { steps: 5 }, medium: { steps: 15 }, high: { steps: 30 } };
 
-export const DEFAULT_PERMISSIONS = { edit: "allow", bash: "allow" };
+export const DEFAULT_PERMISSIONS = { edit: "ask", bash: "ask" };
 
 export const pendingBootstraps = new Map(); // bootID -> conversation
 let bootSeq = 0;
