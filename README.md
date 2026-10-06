@@ -51,6 +51,8 @@ with the OpenCode session as its reasoner:
 ## Voice
 
 - Push-to-talk mic button, or **voice mode** (waveform icon): the mic stays open and `hey <wake>` dispatches hands-free through the same path as typed text.
+- **Voice focus** — voice mode hides the transcript and gives the deck to the ring: a bigger orbit and Jarvis core, live captions and Jarvis's spoken line underneath. *Transcript* pins it back while you keep talking (*Hide* tucks it away again); *Voice off* restores the normal deck.
+- **Spoken replies** — in voice mode Jarvis answers out loud with a one-or-two-sentence summary (a held-back `speak {"text"}` fence, or a local summary of the reply if the model omits it); the full answer stays in the transcript. The core ripples and shows a waveform while it talks. Its own voice is ignored by the mic; say `hey jarvis …` to cut in, or `hey jarvis stop` to hush it.
 - Shell phrases (`dim the fleet`, `use the amber accent`) apply locally with no model call. Permission answers (`allow`/`deny`) and worker controls (`stop the worker`) are exact-match controls.
 
 ## Fleet
