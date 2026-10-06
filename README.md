@@ -213,3 +213,23 @@ hardware-validation work is listed in `ROADMAP.md`.
   empty via a 0.28 floor. Vectors persist beside facts in `memory.json`.
   Embedder warms in the background at boot. Voice loop backs off (1.5s → 30s
   cap) on repeated mic failures instead of hot-looping.
+
+## Brain act (done 2026-10-06)
+
+`npm run prove:act` -> `brain-act-ok` (parse, stream filter, prompt, plain turn,
+canned chain, live Luna delegation).
+
+* Think emits single-line ` ```dispatch {"task", "agent?"}``` ` fences; the act
+  node parses and strips them. Only exact-shape JSON executes — extra keys, bad
+  ids, empty/multiline tasks, and braceless fences warn and never run.
+* A line-buffered stream filter holds fences back mid-flight, so the transcript
+  stays readable while staying live.
+* `dispatchTask` in main runs every intent through autoroute (explicit → auto →
+  default) and the bootstrap gate, then spawns; deck logs each outcome. Both the
+  deck spawn button and brain dispatches share it.
+* Proven live: Luna fenced, the fence resolved, the worker ran and was deleted.
+  Prompt carries MUST-delegate language plus the live fleet registry (or the
+  no-fleet line when empty). One retry absorbs a sampling miss.
+* Real find: millisecond `Date.now()` fact ids collided on rapid remembers,
+  silently dropping vectors and flaking recall. Ids are now unique, loads dedupe,
+  sub-floor tail scores are filtered.

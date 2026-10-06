@@ -17,10 +17,15 @@ export function loadMemory(file = memoryPath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8"));
     const facts = Array.isArray(raw.facts) ? raw.facts : [];
-    const ids = new Set(facts.map((f) => f.id));
+    const seen = new Set();
+    const deduped = facts.filter((f) => {
+      if (!f?.id || seen.has(f.id)) return false;
+      seen.add(f.id);
+      return true;
+    });
     const vectors = raw.vectors && typeof raw.vectors === "object" ? raw.vectors : {};
-    for (const k of Object.keys(vectors)) if (!ids.has(k)) delete vectors[k];
-    return { file, facts, preferences: raw.preferences ?? {}, vectors };
+    for (const k of Object.keys(vectors)) if (!seen.has(k)) delete vectors[k];
+    return { file, facts: deduped, preferences: raw.preferences ?? {}, vectors };
   } catch {
     return { file, facts: [], preferences: {}, vectors: {} };
   }
@@ -39,7 +44,7 @@ export function remember(mem, text, tags = []) {
   const clean = String(text ?? "").trim().slice(0, 280);
   if (!clean) throw new Error("remember: text required");
   if (mem.facts.some((f) => f.text.toLowerCase() === clean.toLowerCase())) return null;
-  const fact = { id: `mem_${Date.now().toString(36)}`, text: clean, at: Date.now(), tags };
+  const fact = { id: `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, text: clean, at: Date.now(), tags };
   mem.facts.push(fact);
   while (mem.facts.length > MAX_FACTS) mem.facts.shift();
   save(mem);
@@ -102,8 +107,8 @@ export async function recallSemantic(mem, query, limit = 5) {
     const [qvec] = await embedRows([String(query)]);
     const ranked = mem.facts
       .map((f) => ({ fact: f, score: dot(qvec, mem.vectors[f.id] ?? []) }))
+      .filter((r) => r.score >= EMBED_FLOOR)
       .sort((a, b) => b.score - a.score || b.fact.at - a.fact.at);
-    if (ranked.length === 0 || ranked[0].score < EMBED_FLOOR) return [];
     return ranked.slice(0, limit).map((r) => r.fact);
   } catch {
     return bm25Recall(mem, query, limit);

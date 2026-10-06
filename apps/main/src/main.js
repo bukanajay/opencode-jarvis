@@ -102,6 +102,31 @@ async function buildBootstrapCtx(directory) {
   return { client, directory, providers, modelsByProvider };
 }
 
+async function dispatchTask(task, { agent, directory } = {}, broadcast) {
+  const dir = directory ?? process.cwd();
+  const { client } = await ensureClient();
+  const said = agent ? { agent, task } : parseExplicitAgent(task);
+  const cleanTask = said?.task ?? task;
+  const settings = shellStore().settings;
+  const registry = await getFleetRegistry(client, dir);
+  const r = resolveAgent(cleanTask, {
+    explicit: said, defaultAgent: settings.defaultAgent ?? "build", autoMode: settings.autoMode, registry,
+  });
+  if (r.error) return { ok: false, reason: r.error };
+  if (!agent && !said) {
+    const gate = await ensureFleetOrAsk(client, dir);
+    if (gate.state === "empty") {
+      const id = `boot_${Date.now().toString(36)}`;
+      bootStash.set(id, { task: cleanTask, directory: dir, gate: true });
+      broadcast({ kind: "bootstrap.ask", id, stage: "gate", prompt: gate.prompt, options: ["yes", "no"] });
+      return { ok: true, needBootstrap: true, id };
+    }
+  }
+  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir });
+  broadcast({ kind: "fleet.state", snapshot: snapshot() });
+  return { ok: true, ...res, agent: agent ?? r.agent, reason: r.reason ?? `default->${agent ?? r.agent}` };
+}
+
 async function answerBootstrapText(id, text, win, broadcast) {
   const entry = bootStash.get(id);
   if (!entry) throw new Error(`no pending bootstrap: ${id}`);
@@ -246,7 +271,22 @@ app.whenReady().then(async () => {
       win?.webContents.send("session.stream", { delta: d });
     }, files?.length ? { files } : {}));
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
-    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0 };
+    const dispatched = [];
+    for (const w of r.warnings ?? []) {
+      win?.webContents.send("session.stream", { delta: `\n[act] ${w}\n` });
+    }
+    for (const d of r.dispatches ?? []) {
+      const dr = await dispatchTask(d.task, { agent: d.agent }, broadcast);
+      if (dr.needBootstrap) {
+        win?.webContents.send("session.stream", { delta: "\n[fleet] no agent yet — answer on the card\n" });
+      } else if (!dr.ok) {
+        win?.webContents.send("session.stream", { delta: `\n[fleet] dispatch refused: ${dr.reason}\n` });
+      } else {
+        win?.webContents.send("session.stream", { delta: `\n[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})\n` });
+      }
+      dispatched.push({ task: d.task, ...dr });
+    }
+    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0, dispatches: dispatched };
   };
   ipcMain.handle("utterance.commit", async (_e, utterance, extra = {}) => {
     if (!utterance?.text || typeof utterance.text !== "string") {
@@ -305,28 +345,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("fleet.spawn", async (_e, { task, agent, directory } = {}) => {
     if (!task || typeof task !== "string") throw new Error("fleet.spawn: task required");
-    const dir = directory ?? process.cwd();
-    const { client } = await ensureClient();
-    const said = parseExplicitAgent(task);
-    const cleanTask = said?.task ?? task;
-    const settings = shellStore().settings;
-    const registry = await getFleetRegistry(client, dir);
-    const r = resolveAgent(cleanTask, {
-      explicit: said, defaultAgent: settings.defaultAgent ?? "build", autoMode: settings.autoMode, registry,
-    });
-    if (r.error) return { ok: false, reason: r.error };
-    if (!agent && !said) {
-      const gate = await ensureFleetOrAsk(client, dir);
-      if (gate.state === "empty") {
-        const id = `boot_${Date.now().toString(36)}`;
-        bootStash.set(id, { task: cleanTask, directory: dir, gate: true });
-        broadcast({ kind: "bootstrap.ask", id, stage: "gate", prompt: gate.prompt, options: ["yes", "no"] });
-        return { ok: true, needBootstrap: true, id };
-      }
-    }
-    const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir });
-    broadcast({ kind: "fleet.state", snapshot: snapshot() });
-    return { ok: true, ...res, agent: agent ?? r.agent, reason: r.reason ?? `default->${agent ?? r.agent}` };
+    return dispatchTask(task, { agent, directory }, broadcast);
   });
   ipcMain.handle("bootstrap.answer", async (_e, { id, text } = {}) => {
     if (!id || typeof text !== "string") throw new Error("bootstrap.answer: id + text required");

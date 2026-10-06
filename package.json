@@ -26,6 +26,7 @@
     "build:audio": "mkdir -p apps/audio-speech-analyzer/bin apps/audio-parakeet/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer && swiftc -O apps/audio-parakeet/src/sim.swift -o apps/audio-parakeet/bin/parakeet",
     "prove:audio": "node scripts/prove-audio.mjs",
     "prove:brain": "node scripts/prove-brain.mjs",
+    "prove:act": "node scripts/prove-brain-act.mjs",
     "prove:integration": "node scripts/prove-integration.mjs",
     "dev:main": "npm --workspace apps/main run dev",
     "dev:deck": "npm --workspace apps/deck run dev"

@@ -14,6 +14,7 @@ via OpenCode model list, no new keys). Local long-term memory.
   provider → model → effort; creates the agent; repeatable for N agents
 - [x] Default agent + auto mode (shell `set.defaultAgent`, `set.autoMode on|off`):
   no agent named → default; auto on → Jarvis picks from task text + fleet registry
+- [x] Act: structured dispatch from think through autoroute + bootstrap gate
 
 Still open (not started): embeddings/LLM fact extraction for memory
 (heuristic keywords today), narrower default permissions for created agents
