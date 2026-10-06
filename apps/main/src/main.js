@@ -152,11 +152,21 @@ app.whenReady().then(async () => {
     if (cmd) {
       const { client } = await ensureClient();
       const sessionID = await ensureJarvisSession(process.cwd());
-      if (cmd.kind === "command") await client.session.command({ sessionID, name: cmd.name, text: cmd.rest });
-      else await client.session.skill({ sessionID, id: cmd.name });
-      return { ok: true, control: cmd.kind, name: cmd.name };
+      try {
+        if (cmd.kind === "command") await client.session.command({ sessionID, name: cmd.name, text: cmd.rest });
+        else await client.session.skill({ sessionID, id: cmd.name });
+        return { ok: true, control: cmd.kind, name: cmd.name };
+      } catch (err) {
+        console.error(`slash ${cmd.kind} ${cmd.name} failed:`, err.message ?? err);
+        throw err;
+      }
     }
-    return commitText(utterance.text, extra.files);
+    try {
+      return await commitText(utterance.text, extra.files);
+    } catch (err) {
+      console.error("utterance.commit failed:", err.message ?? err);
+      throw err;
+    }
   });
   ipcMain.handle("audio.start", async (_e, { simulate, engine } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };

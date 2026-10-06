@@ -720,7 +720,9 @@
     const files = [];
     const ap = $("attach").value.trim();
     if (ap) files.push({ uri: ap.startsWith("file://") ? ap : "file://" + ap, name: ap.split("/").pop() });
-    const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files });
+    const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files })
+      .catch((e) => ({ ok: false, reason: String(e.message ?? e) }));
+    if (!r?.ok) { log.textContent += `\n[fault] ${r?.reason ?? "send failed"}\n`; sndFault(); return; }
     if (r?.control === "command" || r?.control === "skill") log.textContent += `\n[${r.control} ${r.name} sent]\n`;
     if (r?.control === "app.command") log.textContent += `\n[settings] ${r.entry.what} — live\n`;
     if (r?.control === "config.apply") log.textContent += `\n[config] ${r.note ?? r.name}\n`;
