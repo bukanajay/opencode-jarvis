@@ -102,6 +102,60 @@ export async function listModels() {
   return client.model.list();
 }
 
+export async function getDiff(sessionID) {
+  const { client } = await ensureClient();
+  return client.session.diff({ sessionID });
+}
+
+export async function listMessages(sessionID, limit = 50) {
+  const { client } = await ensureClient();
+  return client.message.list({ sessionID, limit, order: "asc" });
+}
+
+// Undo = fork first (redo branch), then stage + commit the revert on the original.
+// Attribution lives on the step's first assistant message (reasoning+tool),
+// not on the tool.called event's message. Redo = the pre-undo fork.
+export async function undoMessage(sessionID, messageID) {
+  const { client } = await ensureClient();
+  const mid = messageID ?? (await findUndoTarget(client, sessionID));
+  if (!mid) throw new Error("undo: no tool-call message found");
+  const fork = await client.session.fork({ sessionID });
+  const redoID = fork?.id ?? fork?.data?.id ?? null;
+  if (redoID) {
+    const w = record(redoID);
+    w.task = `redo: fork of ${sessionID.slice(0, 8)}`;
+    w.state = "idle";
+  }
+  await client.session.revert.stage({ sessionID, messageID: mid, files: true });
+  await client.session.revert.commit({ sessionID });
+  return { ok: true, sessionID, messageID: mid, redoID };
+}
+
+async function listAllMessages(client, sessionID) {
+  const out = [];
+  const seen = new Set();
+  let cursor;
+  for (let p = 0; p < 5; p++) {
+    const m = await client.message.list({ sessionID, limit: 50, order: "asc", cursor });
+    for (const x of (m.data ?? [])) {
+      if (x?.id && !seen.has(x.id)) { seen.add(x.id); out.push(x); }
+    }
+    cursor = m.cursor;
+    if (!cursor) break;
+  }
+  return out;
+}
+
+export async function findUndoTarget(client, sessionID) {
+  const all = await listAllMessages(client, sessionID);
+  // Rollback boundary: the user message whose turn made the changes.
+  // Staging it reverts everything after it (stage returns the reverse patch).
+  for (let i = all.length - 1; i >= 0; i--) {
+    if ((all[i].type ?? all[i].role) === "user" && i < all.length - 1) return all[i].id;
+  }
+  return null;
+}
+
 export async function listCommands() {
   const { client } = await ensureClient();
   return client.command.list();

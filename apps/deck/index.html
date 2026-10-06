@@ -78,7 +78,10 @@
     <p><button class="ghost" id="work-stop">Stop this worker</button>
     <button class="ghost" id="work-rename">Rename</button>
     <button class="ghost" id="work-fork">Fork</button>
+    <button class="ghost" id="work-diff">Diff</button>
+    <button class="ghost" id="work-undo">Undo last</button>
     <button class="ghost" id="work-back">Back to deck</button></p>
+    <div class="tools" id="work-diff"></div>
   </section>
   <section>
     <h2>Composer</h2>
@@ -289,6 +292,18 @@
     window.jarvis.fleetList().then((r) => renderRing(r.workers));
   };
   $("work-fork").onclick = async () => { if (selected) { const r = await window.jarvis.sessionFork(selected); log.textContent += `\n[forked ${r.forkID}]\n`; } };
+  $("work-diff").onclick = async () => {
+    if (!selected) return;
+    const r = await window.jarvis.sessionDiff(selected);
+    const files = r.diff?.data ?? r.diff ?? [];
+    $("work-diff").textContent = (Array.isArray(files) ? files : []).map((f) => `${f.file ?? f.path} (${f.status})`).join("\n") || "(clean)";
+  };
+  $("work-undo").onclick = async () => {
+    if (!selected) return;
+    const r = await window.jarvis.sessionUndo(selected);
+    log.textContent += `\n[undone, redo branch ${r.redoID}]\n`;
+    $("work-diff").textContent = "";
+  };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -223,6 +223,13 @@ app.whenReady().then(async () => {
     const { client } = await ensureClient();
     await client.session.skill({ sessionID, id });
     return { ok: true };
+  });
+  ipcMain.handle("session.diff", async (_e, { sessionID } = {}) => ({ ok: true, diff: await getDiff(sessionID) }));
+  ipcMain.handle("message.list", async (_e, { sessionID, limit } = {}) => ({ ok: true, messages: await listMessages(sessionID, limit) }));
+  ipcMain.handle("session.undo", async (_e, { sessionID, messageID } = {}) => {
+    const r = await undoMessage(sessionID, messageID);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return r;
   });
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
