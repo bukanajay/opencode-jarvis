@@ -16,9 +16,12 @@ Result: `loop-ok` on `opencode/fledge-alpha-free`.
 
 ## Luna status
 
-Wanted default is `opencode-go/gpt-6-luna`. Currently `provider.quota: Go usage limit exceeded (5 hour)`.
-`apps/main/src/sessions.js` keeps Luna as default, falls back once, and reports
-`modelUsed` so Jarvis can say which model actually answered.
+Wanted default is `opencode-go/gpt-6-luna`. The Go 5-hour quota blocked it on
+2026-10-06 afternoon, so `apps/main/src/sessions.js` keeps Luna as default, falls
+back once, and reports `modelUsed` so Jarvis can say which model actually answered.
+Recheck 2026-10-06 ~18:30 local: Luna live (step runs `opencode-go/gpt-6-luna`,
+first text at ~1s, `loop-ok` on the default path). Fallback stays for the next
+quota window.
 
 Set `JARVIS_MODEL=provider/id` to override without code change.
 
