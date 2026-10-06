@@ -84,10 +84,15 @@
     <h2>Composer</h2>
     <div id="caption" aria-live="polite"></div>
     <form id="f">
-      <input id="q" placeholder="Type, or Mic, or 'launch worker: …'" />
+      <input id="q" placeholder="Type, or Mic, or 'launch worker: …'" list="cmds" />
       <button type="submit">Send</button>
       <button type="button" class="ghost" id="mic">Mic</button>
     </form>
+    <form id="fa" style="margin-top:8px;">
+      <input id="attach" placeholder="attach path (optional)" />
+      <button class="ghost" type="submit">Attach</button>
+    </form>
+    <datalist id="cmds"></datalist>
     <div id="log" aria-live="polite"></div>
   </section>
   <section>
@@ -293,8 +298,30 @@
     log.textContent += "\n> " + text + "\n";
     const m = text.match(/^launch worker:\s*(.+)/i);
     if (m) { await window.jarvis.fleetSpawn(m[1]); return; }
-    await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() });
+    const files = [];
+    const ap = $("attach").value.trim();
+    if (ap) files.push({ uri: ap.startsWith("file://") ? ap : "file://" + ap, name: ap.split("/").pop() });
+    const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files });
+    if (r?.control === "command" || r?.control === "skill") log.textContent += `\n[${r.control} ${r.name} sent]\n`;
   });
+  $("fa").addEventListener("submit", (e) => { e.preventDefault(); log.textContent += "\n[attach staged — send a message to include it]\n"; });
+  (async () => {
+    try {
+      const dl = $("cmds");
+      const c = await window.jarvis.commandList();
+      ((c.commands?.data ?? [])).forEach((x) => {
+        const o = document.createElement("option");
+        o.value = `/${x.name} ${x.description ?? ""}`.trim();
+        dl.appendChild(o);
+      });
+      const s = await window.jarvis.skillList();
+      ((s.skills?.data ?? [])).forEach((x) => {
+        const o = document.createElement("option");
+        o.value = `@${x.id ?? x.name}`;
+        dl.appendChild(o);
+      });
+    } catch {}
+  })();
   $("mic").onclick = async (e) => {
     const b = e.target;
     const r = await window.jarvis.audioStart({});

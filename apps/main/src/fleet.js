@@ -102,6 +102,16 @@ export async function listModels() {
   return client.model.list();
 }
 
+export async function listCommands() {
+  const { client } = await ensureClient();
+  return client.command.list();
+}
+
+export async function listSkills() {
+  const { client } = await ensureClient();
+  return client.skill.list();
+}
+
 export async function ensureFleetPump(onEvent) {
   if (onEvent) listeners.add(onEvent);
   if (pumpStarted) return;

@@ -64,7 +64,7 @@ export async function promptJarvis(text, onDelta, opts = {}) {
         }
       })().catch(reject);
       try {
-        await client.session.prompt({ sessionID: sid, text });
+        await client.session.prompt(opts.files?.length ? { sessionID: sid, text, files: opts.files } : { sessionID: sid, text });
       } catch (err) {
         clearTimeout(timer);
         reject(err);

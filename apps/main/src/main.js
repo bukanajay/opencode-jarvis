@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -50,6 +50,15 @@ function matchPendingForm(text) {
   return null;
 }
 
+// /name rest runs a slash command, @id invokes a skill. Both are turns, not prompts.
+function parseSlash(text) {
+  const m = String(text ?? "").trim().match(/^\/([a-z0-9-]+)\s*(.*)$/i);
+  if (m) return { kind: "command", name: m[1], rest: m[2] ?? "" };
+  const s = String(text ?? "").trim().match(/^@([a-z0-9-]+)\s*(.*)$/i);
+  if (s) return { kind: "skill", name: s[1], rest: s[2] ?? "" };
+  return null;
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
 
@@ -80,7 +89,7 @@ app.whenReady().then(async () => {
     else if (ev.kind === "form.resolved") broadcast({ kind: "form.resolved", ...ev });
     else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
   });
-  const commitText = async (text) => {
+  const commitText = async (text, files) => {
     const formMatch = matchPendingForm(text);
     const routed = routeUtterance(text, undefined, undefined, formMatch?.answer ?? null);
     if (routed.route === "permission") {
@@ -129,15 +138,24 @@ app.whenReady().then(async () => {
     }
     const r = await promptJarvis(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    });
+    }, files?.length ? { files } : {});
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
-    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status };
+    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0 };
   };
-  ipcMain.handle("utterance.commit", async (_e, utterance) => {
+  ipcMain.handle("utterance.commit", async (_e, utterance, extra = {}) => {
     if (!utterance?.text || typeof utterance.text !== "string") {
       throw new Error("utterance.text required");
     }
-    return commitText(utterance.text);
+    // Slash commands and skill mentions route to their endpoints, not the model.
+    const cmd = parseSlash(utterance.text);
+    if (cmd) {
+      const { client } = await ensureClient();
+      const sessionID = await ensureJarvisSession(process.cwd());
+      if (cmd.kind === "command") await client.session.command({ sessionID, name: cmd.name, text: cmd.rest });
+      else await client.session.skill({ sessionID, id: cmd.name });
+      return { ok: true, control: cmd.kind, name: cmd.name };
+    }
+    return commitText(utterance.text, extra.files);
   });
   ipcMain.handle("audio.start", async (_e, { simulate } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };
@@ -195,6 +213,17 @@ app.whenReady().then(async () => {
   ipcMain.handle("session.switchModel", async (_e, { sessionID, providerID, id } = {}) => switchSessionModel(sessionID, providerID, id));
   ipcMain.handle("agent.list", async () => ({ ok: true, agents: await listAgents(process.cwd()) }));
   ipcMain.handle("model.list", async () => ({ ok: true, models: await listModels() }));
+  ipcMain.handle("command.list", async () => ({ ok: true, commands: await listCommands() }));
+  ipcMain.handle("skill.list", async () => ({ ok: true, skills: await listSkills() }));
+  ipcMain.handle("session.command", async (_e, { sessionID, name, text, files } = {}) => {
+    const { client } = await ensureClient();
+    return { ok: true, sent: await client.session.command({ sessionID, name, text: text ?? "", files }) };
+  });
+  ipcMain.handle("session.skill", async (_e, { sessionID, id } = {}) => {
+    const { client } = await ensureClient();
+    await client.session.skill({ sessionID, id });
+    return { ok: true };
+  });
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("jarvis", {
-  commitUtterance: (utterance) => ipcRenderer.invoke("utterance.commit", utterance),
+  commitUtterance: (utterance, extra) => ipcRenderer.invoke("utterance.commit", utterance, extra ?? {}),
   audioStart: (opts) => ipcRenderer.invoke("audio.start", opts ?? {}),
   audioStop: () => ipcRenderer.invoke("audio.stop"),
   onStream: (fn) => ipcRenderer.on("session.stream", (_e, payload) => fn(payload)),
@@ -15,7 +15,11 @@ contextBridge.exposeInMainWorld("jarvis", {
   fleetDelete: (sessionID) => ipcRenderer.invoke("fleet.delete", { sessionID }),
   sessionRename: (sessionID, title) => ipcRenderer.invoke("session.rename", { sessionID, title }),
   sessionFork: (sessionID, before) => ipcRenderer.invoke("session.fork", { sessionID, before }),
+  commandList: () => ipcRenderer.invoke("command.list"),
+  skillList: () => ipcRenderer.invoke("skill.list"),
   sessionList: () => ipcRenderer.invoke("session.list"),
+  sessionCommand: (sessionID, name, text) => ipcRenderer.invoke("session.command", { sessionID, name, text }),
+  sessionSkill: (sessionID, id) => ipcRenderer.invoke("session.skill", { sessionID, id }),
   sessionSwitchAgent: (sessionID, agent) => ipcRenderer.invoke("session.switchAgent", { sessionID, agent }),
   sessionSwitchModel: (sessionID, providerID, id) => ipcRenderer.invoke("session.switchModel", { sessionID, providerID, id }),
   agentList: () => ipcRenderer.invoke("agent.list"),
