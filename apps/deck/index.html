@@ -62,6 +62,12 @@
     <p><button id="cfg-yes">Yes, apply it</button><button class="ghost" id="cfg-no">Discard</button>
     <span class="res">voice: say “yes, apply it” or “no”</span></p>
   </section>
+  <section id="frm" style="display:none;border-color:var(--accent);">
+    <h2>Question — answer to continue</h2>
+    <div id="frm-title"></div>
+    <div id="frm-fields" class="res"></div>
+    <p><span class="res">voice: say the option, or answer by hand</span></p>
+  </section>
   <section id="work">
     <h2>Work view</h2>
     <div id="work-task"></div>
@@ -165,6 +171,34 @@
   window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
   $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
   $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
+  // Forms: blocking card with one button per option. Voice matches option text.
+  window.jarvis?.onFormWaiting(({ sessionID, forms }) => {
+    sndPermission();
+    const f = forms[0];
+    if (!f) return;
+    $("frm").style.display = "block";
+    $("frm-title").textContent = f.title ?? "Question";
+    $("frm").dataset.sessionID = sessionID;
+    $("frm").dataset.formID = f.formID;
+    const box = $("frm-fields");
+    box.innerHTML = "";
+    (f.fields ?? []).forEach((fd) => {
+      const h = document.createElement("div");
+      h.textContent = `${fd.title ?? fd.key}: ${fd.description ?? ""}`;
+      box.appendChild(h);
+      (fd.options ?? []).forEach((o) => {
+        const b = document.createElement("button");
+        b.className = "ghost";
+        b.textContent = o.label ?? o.value;
+        b.onclick = async () => {
+          await window.jarvis.formReply(sessionID, f.formID, { [fd.key]: o.value ?? o.label });
+          $("frm").style.display = "none";
+        };
+        box.appendChild(b);
+      });
+    });
+  });
+  window.jarvis?.onFormResolved(() => { $("frm").style.display = "none"; sndDone(); });
   window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
   window.jarvis?.onDone(({ modelUsed, status }) => {
     log.textContent += `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;

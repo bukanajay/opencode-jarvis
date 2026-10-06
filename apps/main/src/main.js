@@ -7,6 +7,7 @@ import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js"
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
+import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
 
 let shell = null;
 const shellStore = () => (shell ??= loadStore());
@@ -41,6 +42,14 @@ async function answerPending(decision) {
   return { requestID, decision, r };
 }
 
+function matchPendingForm(text) {
+  for (const p of [...pendingForms.values()].reverse()) {
+    const answer = matchFormAnswer(p.form, text);
+    if (answer) return { formID: p.formID, sessionID: p.sessionID, answer };
+  }
+  return null;
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
 
@@ -67,13 +76,21 @@ app.whenReady().then(async () => {
     else if (ev.kind === "permission.resolved") broadcast({ kind: "permission.resolved", ...ev });
     else if (ev.kind === "worker.tool") broadcast({ kind: "session.tool", ...ev });
     else if (ev.kind === "worker.stream") broadcast({ kind: "worker.stream", ...ev });
+    else if (ev.kind === "form.waiting") broadcast({ kind: "form.waiting", ...ev });
+    else if (ev.kind === "form.resolved") broadcast({ kind: "form.resolved", ...ev });
     else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
   });
   const commitText = async (text) => {
-    const routed = routeUtterance(text);
+    const formMatch = matchPendingForm(text);
+    const routed = routeUtterance(text, undefined, undefined, formMatch?.answer ?? null);
     if (routed.route === "permission") {
       const r = await answerPending(routed.decision);
       return { ok: true, control: "permission", ...r };
+    }
+    if (routed.route === "form.answer" && formMatch) {
+      await replyForm(formMatch.sessionID, formMatch.formID, routed.answer);
+      broadcast({ kind: "form.resolved", sessionID: formMatch.sessionID });
+      return { ok: true, control: "form.answer", ...formMatch };
     }
     if (routed.route === "config.confirm") {
       const r = await confirmWidening(
@@ -202,6 +219,16 @@ app.whenReady().then(async () => {
     ok: true,
     pending: [...pendingConfigs.values()].map(publicPending),
   }));
+  ipcMain.handle("form.reply", async (_e, { sessionID, formID, answer } = {}) => {
+    if (!sessionID || !formID || !answer) throw new Error("form.reply: sessionID + formID + answer required");
+    await replyForm(sessionID, formID, answer);
+    broadcast({ kind: "form.resolved", sessionID });
+    return { ok: true };
+  });
+  ipcMain.handle("form.list", async (_e, { sessionID } = {}) => {
+    if (!sessionID) throw new Error("form.list: sessionID required");
+    return { ok: true, forms: await refreshForms(sessionID) };
+  });
   await createWindow();
 });
 

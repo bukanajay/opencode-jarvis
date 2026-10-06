@@ -5,6 +5,7 @@ import { ensureClient } from "./service.js";
 import { ensureJarvisSession, parseModelRef, JARVIS_MODEL } from "./sessions.js";
 import { matchAppCommand } from "./shell.js";
 import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
+import { refreshForms, pendingForms } from "./forms.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -39,6 +40,21 @@ function workerEvent(sessionID) {
 
 export function snapshot() {
   return [...workers.values()].map((w) => workerEvent(w.sessionID));
+}
+
+export function publicForm(f) {
+  return {
+    formID: f.id ?? f.formID,
+    sessionID: f.sessionID,
+    title: f.title,
+    fields: (f.fields ?? []).map((fd) => ({
+      key: fd.key,
+      title: fd.title,
+      description: fd.description,
+      type: fd.type,
+      options: (fd.options ?? []).map((o) => ({ value: o.value, label: o.label, description: o.description })),
+    })),
+  };
 }
 
 export async function listSessions() {
@@ -87,6 +103,19 @@ export async function ensureFleetPump(onEvent) {
         case "session.tool.called":
           w.state = "working";
           emit({ kind: "worker.tool", sessionID: sid, tool: d.id, state: "start" });
+          if (d.name === "question" || (d.id ?? "").includes("question")) {
+            refreshForms(sid).then((forms) => {
+              if (forms.length > 0) {
+                w.state = "working";
+                emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+              }
+            }).catch(() => {});
+            setTimeout(() => {
+              refreshForms(sid).then((forms) => {
+                if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+              }).catch(() => {});
+            }, 4000);
+          }
           break;
         case "session.tool.progress":
           break;
@@ -132,6 +161,12 @@ export async function ensureFleetPump(onEvent) {
           emit({ kind: "worker.done", sessionID: sid, status: "failed", error: d.error });
           break;
         default:
+          if (ev.type.startsWith("form.")) {
+            refreshForms(sid).then((forms) => {
+              if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+              else emit({ kind: "form.resolved", sessionID: sid });
+            }).catch(() => {});
+          }
           break;
       }
     }
@@ -197,12 +232,13 @@ export function latestActiveWorker() {
 }
 
 // Pure routing: control phrase vs model prompt. Main decides; flaky transcripts cannot eval.
-export function routeUtterance(text, hasPending = pendingPermissions.size > 0, hasConfigPending = pendingConfigs.size > 0) {
+export function routeUtterance(text, hasPending = pendingPermissions.size > 0, hasConfigPending = pendingConfigs.size > 0, formAnswer = null) {
   const t = String(text ?? "").trim().toLowerCase();
   if (hasPending) {
     if (/^(allow|yes|approve|grant)(\s+once)?$/.test(t)) return { route: "permission", decision: "allow" };
     if (/^(deny|no|reject|block)$/.test(t)) return { route: "permission", decision: "deny" };
   }
+  if (formAnswer) return { route: "form.answer", answer: formAnswer };
   if (hasConfigPending) {
     if (/^(yes,? apply it|yes|confirm|apply it|do it)$/.test(t)) return { route: "config.confirm", confirmed: true };
     if (/^(no|cancel|never mind|don't|do not)$/.test(t)) return { route: "config.confirm", confirmed: false };
