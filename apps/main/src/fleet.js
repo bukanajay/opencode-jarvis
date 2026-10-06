@@ -3,7 +3,7 @@
 // idle | working | permission | done | failed | stopped
 import { ensureClient } from "./service.js";
 import { ensureJarvisSession, parseModelRef, JARVIS_MODEL } from "./sessions.js";
-import { matchAppCommand } from "./shell.js";
+import { matchAppCommand, loadStore } from "./shell.js";
 import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 import { refreshForms, pendingForms } from "./forms.js";
 
@@ -298,7 +298,10 @@ export async function ensureFleetPump(onEvent) {
 }
 
 export function resolveWorkerModel() {
-  return parseModelRef(process.env.WORKER_MODEL) ?? parseModelRef(process.env.JARVIS_MODEL) ?? JARVIS_MODEL;
+  const shellModel = (() => {
+    try { return parseModelRef(loadStore().settings.workerModel); } catch { return null; }
+  })();
+  return parseModelRef(process.env.WORKER_MODEL) ?? parseModelRef(process.env.JARVIS_MODEL) ?? shellModel ?? JARVIS_MODEL;
 }
 
 export async function spawnWorker(task, opts = {}) {

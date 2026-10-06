@@ -233,3 +233,14 @@ canned chain, live Luna delegation).
 * Real find: millisecond `Date.now()` fact ids collided on rapid remembers,
   silently dropping vectors and flaking recall. Ids are now unique, loads dedupe,
   sub-floor tail scores are filtered.
+
+## Settings models (done 2026-10-06)
+
+`npm run prove:models` -> `models-ok` (validate, precedence, live switch).
+
+* Luna stays the Jarvis default, now changeable in the drawer Models panel:
+  Jarvis / Fleet / Default-agent selects fed by the server lists, applied through
+  `app.command`. `set.jarvisModel` validates against the model list and switches
+  the live brain session *before* saving — a bad model never persists.
+* Precedence everywhere: env > shell > default (`JARVIS_BRAIN_MODEL`,
+  `WORKER_MODEL` still win for scripts and tests).

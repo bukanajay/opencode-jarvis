@@ -27,6 +27,7 @@
     "prove:audio": "node scripts/prove-audio.mjs",
     "prove:brain": "node scripts/prove-brain.mjs",
     "prove:act": "node scripts/prove-brain-act.mjs",
+    "prove:models": "node scripts/prove-models.mjs",
     "prove:integration": "node scripts/prove-integration.mjs",
     "dev:main": "npm --workspace apps/main run dev",
     "dev:deck": "npm --workspace apps/deck run dev"

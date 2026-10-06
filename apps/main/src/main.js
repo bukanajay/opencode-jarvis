@@ -6,7 +6,7 @@ import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
-import { brainRespond } from "./brain/brain.js";
+import { brainRespond, setBrainModel } from "./brain/brain.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -449,6 +449,13 @@ app.whenReady().then(async () => {
     return { ok: true, requestID, decision };
   });
   ipcMain.handle("app.command", async (_e, { name, args } = {}) => {
+    if (name === "set.jarvisModel") {
+      // Validate against the server list BEFORE saving: a bad model must never persist.
+      const m = String(args?.value ?? "");
+      const slash = m.indexOf("/");
+      if (slash < 0) throw new Error("set.jarvisModel: want provider/id");
+      await setBrainModel(m.slice(0, slash), m.slice(slash + 1));
+    }
     const entry = applyAppCommand(shellStore(), name, args);
     broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
     return { ok: true, entry };

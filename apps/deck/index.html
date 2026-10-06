@@ -246,6 +246,15 @@
       <span class="tele">system</span>
       <button class="ghost icon" id="drawer-x" aria-label="Close panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
+  <details id="model-settings" open>
+    <summary>Models</summary>
+    <div class="body">
+    <p><label class="res">Jarvis<br /><select id="set-jarvisModel" style="width:100%"></select></label></p>
+    <p><label class="res">Fleet workers<br /><select id="set-workerModel" style="width:100%"></select></label></p>
+    <p><label class="res">Default agent<br /><select id="set-defaultAgent" style="width:100%"></select></label></p>
+    <div class="res" id="model-note"></div>
+    </div>
+  </details>
   <details id="mcp" open>
     <summary>MCP <span class="res" id="mcp-sum"></span></summary>
     <div class="body">
@@ -814,6 +823,7 @@
     $("drawer").classList.add("open");
     $("scrim").style.display = "block";
     if ($("mcp").open) mcpRefresh();
+    loadModelSettings(false);
   }
   function closeDrawer() {
     $("drawer").classList.remove("open");
@@ -822,6 +832,65 @@
   $("drawer-btn").onclick = openDrawer;
   $("drawer-x").onclick = closeDrawer;
   $("scrim").onclick = closeDrawer;
+  // Models panel: selects fed by the server lists, applied through app.command
+  // (jarvisModel validates + switches the live session before saving).
+  let modelsLoadedAt = 0;
+  async function loadModelSettings(force) {
+    if (!force && Date.now() - modelsLoadedAt < 60000) return;
+    modelsLoadedAt = Date.now();
+    try {
+      const [m, a, s] = await Promise.all([
+        window.jarvis.modelList(), window.jarvis.agentList(), window.jarvis.settingsGet(),
+      ]);
+      const models = m.models?.models ?? m.models?.data ?? [];
+      const byProv = {};
+      for (const x of models) {
+        const p = x.providerID ?? "?";
+        (byProv[p] ??= []).push(x);
+      }
+      for (const id of ["set-jarvisModel", "set-workerModel"]) {
+        const sel = $(id);
+        sel.innerHTML = "";
+        for (const p of Object.keys(byProv).sort()) {
+          const g = document.createElement("optgroup");
+          g.label = p;
+          for (const x of byProv[p]) {
+            const o = document.createElement("option");
+            o.value = `${p}/${x.modelID ?? x.id}`;
+            o.textContent = x.id;
+            g.appendChild(o);
+          }
+          sel.appendChild(g);
+        }
+      }
+      const cur = s.settings ?? {};
+      if ([...$("set-jarvisModel").options].some((o) => o.value === cur.jarvisModel)) {
+        $("set-jarvisModel").value = cur.jarvisModel;
+      }
+      if ([...$("set-workerModel").options].some((o) => o.value === cur.workerModel)) {
+        $("set-workerModel").value = cur.workerModel;
+      }
+      const asel = $("set-defaultAgent");
+      asel.innerHTML = "";
+      for (const x of (a.agents?.data ?? [])) {
+        const o = document.createElement("option");
+        o.value = o.textContent = x.id;
+        asel.appendChild(o);
+      }
+      if ([...asel.options].some((o) => o.value === cur.defaultAgent)) asel.value = cur.defaultAgent;
+      $("model-note").textContent = "";
+    } catch (e) { $("model-note").textContent = String(e.message ?? e); }
+  }
+  async function applyModelSetting(name, value, label) {
+    $("model-note").textContent = "";
+    try {
+      await window.jarvis.appCommand(name, { value });
+      $("model-note").textContent = `${label} → ${value} (live)`;
+    } catch (e) { $("model-note").textContent = `${label} rejected: ${e.message ?? e}`; loadModelSettings(true); }
+  }
+  $("set-jarvisModel").onchange = (e) => applyModelSetting("set.jarvisModel", e.target.value, "Jarvis");
+  $("set-workerModel").onchange = (e) => applyModelSetting("set.workerModel", e.target.value, "Fleet");
+  $("set-defaultAgent").onchange = (e) => applyModelSetting("set.defaultAgent", e.target.value, "Default agent");
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("q").value.trim();

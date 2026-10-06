@@ -8,13 +8,16 @@ import { ensureClient } from "../service.js";
 import { getFleetRegistry } from "../autoroute.js";
 import { JARVIS_MODEL, JARVIS_FALLBACK_MODEL, parseModelRef } from "../sessions.js";
 import { loadMemory, remember, recall, extractCandidates } from "./memory.js";
+import { loadStore } from "../shell.js";
 
 let brainSessionID = null;
 let brainModelUsed = null;
 let compiled = null;
 
-function wantedBrainModel() {
-  return parseModelRef(process.env.JARVIS_BRAIN_MODEL) ?? loadMemory().preferences.brainModel ?? JARVIS_MODEL;
+export function wantedBrainModel() {
+  let shellModel = null;
+  try { shellModel = parseModelRef(loadStore().settings.jarvisModel); } catch {}
+  return parseModelRef(process.env.JARVIS_BRAIN_MODEL) ?? shellModel ?? loadMemory().preferences.brainModel ?? JARVIS_MODEL;
 }
 
 export function getBrainModel() {

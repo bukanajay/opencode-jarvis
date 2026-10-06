@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.defaultAgent"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -27,6 +27,8 @@ export const DEFAULTS = {
   voiceMode: "off",
   autoMode: "off",
   defaultAgent: "build",
+  jarvisModel: "opencode-go/gpt-6-luna",
+  workerModel: "opencode/fledge-alpha-free",
 };
 
 export function storePath() {
@@ -64,6 +66,8 @@ const KEY_OF = {
   "set.voiceMode": "voiceMode",
   "set.autoMode": "autoMode",
   "set.defaultAgent": "defaultAgent",
+  "set.jarvisModel": "jarvisModel",
+  "set.workerModel": "workerModel",
 };
 export const ON_OFF = ["on", "off"];
 
@@ -94,6 +98,10 @@ function validate(name, args) {
       break;
     case "set.defaultAgent":
       if (!/^[a-z0-9-]{1,48}$/.test(value)) throw new Error(`${name}: bad agent id`);
+      break;
+    case "set.jarvisModel":
+    case "set.workerModel":
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/\S+$/.test(value)) throw new Error(`${name}: want provider/id`);
       break;
   }
   return value;
