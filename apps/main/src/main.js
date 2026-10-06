@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 
@@ -167,6 +167,13 @@ app.whenReady().then(async () => {
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     return { ok: true };
   });
+  ipcMain.handle("session.rename", async (_e, { sessionID, title } = {}) => {
+    const r = await renameSession(sessionID, title);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return r;
+  });
+  ipcMain.handle("session.fork", async (_e, { sessionID, before } = {}) => forkSession(sessionID, before));
+  ipcMain.handle("session.list", async () => ({ ok: true, sessions: await listSessions() }));
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

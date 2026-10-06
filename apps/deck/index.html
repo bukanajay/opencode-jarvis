@@ -68,6 +68,8 @@
     <div class="tools" id="work-tools"></div>
     <div id="work-log"></div>
     <p><button class="ghost" id="work-stop">Stop this worker</button>
+    <button class="ghost" id="work-rename">Rename</button>
+    <button class="ghost" id="work-fork">Fork</button>
     <button class="ghost" id="work-back">Back to deck</button></p>
   </section>
   <section>
@@ -208,6 +210,14 @@
   };
   $("stop").onclick = async () => { await window.jarvis.fleetStop(); };
   $("work-stop").onclick = async () => { if (selected) await window.jarvis.fleetStop(selected); };
+  $("work-rename").onclick = async () => {
+    if (!selected) return;
+    const title = prompt("Rename session:", workers.find((w) => w.id === selected)?.task ?? "");
+    if (!title) return;
+    await window.jarvis.sessionRename(selected, title);
+    window.jarvis.fleetList().then((r) => renderRing(r.workers));
+  };
+  $("work-fork").onclick = async () => { if (selected) { const r = await window.jarvis.sessionFork(selected); log.textContent += `\n[forked ${r.forkID}]\n`; } };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();

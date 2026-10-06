@@ -41,6 +41,27 @@ export function snapshot() {
   return [...workers.values()].map((w) => workerEvent(w.sessionID));
 }
 
+export async function listSessions() {
+  const { client } = await ensureClient();
+  return client.session.list();
+}
+
+export async function renameSession(sessionID, title) {
+  const { client } = await ensureClient();
+  if (!title || typeof title !== "string") throw new Error("rename: title required");
+  await client.session.update({ sessionID, title });
+  const w = workers.get(sessionID);
+  if (w) w.task = title;
+  return { ok: true, sessionID, title };
+}
+
+export async function forkSession(sessionID, before) {
+  const { client } = await ensureClient();
+  const fork = await client.session.fork(before ? { sessionID, before } : { sessionID });
+  const id = fork?.id ?? fork?.data?.id ?? null;
+  return { ok: true, sessionID, forkID: id };
+}
+
 export async function ensureFleetPump(onEvent) {
   if (onEvent) listeners.add(onEvent);
   if (pumpStarted) return;
