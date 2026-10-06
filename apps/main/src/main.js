@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, followUpWorker, workers, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
-import { brainRespond, setBrainModel } from "./brain/brain.js";
+import { brainRespond, brainReview, setBrainModel } from "./brain/brain.js";
+import { collectWorkerReport, reportHeadline } from "./brain/report.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -102,7 +103,7 @@ async function buildBootstrapCtx(directory) {
   return { client, directory, providers, modelsByProvider };
 }
 
-async function dispatchTask(task, { agent, directory } = {}, broadcast) {
+async function dispatchTask(task, { agent, directory, chain, round } = {}, broadcast) {
   const dir = directory ?? process.cwd();
   const { client } = await ensureClient();
   const said = agent ? { agent, task } : parseExplicitAgent(task);
@@ -122,7 +123,7 @@ async function dispatchTask(task, { agent, directory } = {}, broadcast) {
       return { ok: true, needBootstrap: true, id };
     }
   }
-  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir });
+  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir, chain, round });
   broadcast({ kind: "fleet.state", snapshot: snapshot() });
   return { ok: true, ...res, agent: agent ?? r.agent, reason: r.reason ?? `default->${agent ?? r.agent}` };
 }
@@ -178,6 +179,35 @@ function parseSlash(text) {
   return null;
 }
 
+// Closed loop: a finished worker reports back to Jarvis, who reviews the
+// outcome in the chat and may take one next step (follow up with the same
+// worker, or dispatch a specialist). Bounded by MAX_ROUNDS per chain; off with
+// "turn review mode off".
+async function reviewWorker(ev, broadcast) {
+  if (!ev.review || shellStore().settings.reviewMode === "off") return;
+  const w = workers.get(ev.sessionID);
+  if (!w) return;
+  const say = (delta) => win?.webContents.send("session.stream", { delta });
+  const { client } = await ensureClient();
+  const report = await collectWorkerReport(client, w, { status: ev.status, error: ev.error });
+  broadcast({
+    kind: "worker.report",
+    report: { sessionID: report.sessionID, agent: report.agent, round: report.round, status: report.status, headline: reportHeadline(report), files: report.files },
+  });
+  const r = await brainReview(report, say);
+  win?.webContents.send("session.done", { modelUsed: r.modelUsed, status: r.status });
+  for (const warn of r.warnings ?? []) say(`[review] ${warn}\n`);
+  if (r.followup) {
+    const f = await followUpWorker(report.sessionID, r.followup.task);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    say(`[fleet] follow-up → ${report.agent} (${report.sessionID.slice(0, 8)}) round ${f.round}\n`);
+  } else if (r.dispatch) {
+    const dr = await dispatchTask(r.dispatch.task, { agent: r.dispatch.agent, chain: report.chain, round: report.round + 1 }, broadcast);
+    if (dr.ok && !dr.needBootstrap) say(`[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})\n`);
+    else if (!dr.ok) say(`[fleet] dispatch refused: ${dr.reason}\n`);
+  }
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
 
@@ -206,6 +236,13 @@ app.whenReady().then(async () => {
     else if (ev.kind === "worker.stream") broadcast({ kind: "worker.stream", ...ev });
     else if (ev.kind === "form.waiting") broadcast({ kind: "form.waiting", ...ev });
     else if (ev.kind === "form.resolved") broadcast({ kind: "form.resolved", ...ev });
+    else if (ev.kind === "worker.done") {
+      broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
+      reviewWorker(ev, broadcast).catch((err) => {
+        console.error("worker review failed:", err?.message ?? err);
+        win?.webContents.send("session.stream", { delta: `[review] failed: ${String(err?.message ?? err).slice(0, 160)}\n` });
+      });
+    } else if (ev.kind === "fleet.pump") broadcast({ kind: "fleet.pump", state: ev.state, attempt: ev.attempt });
     else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
   });
   const commitText = async (text, files) => {

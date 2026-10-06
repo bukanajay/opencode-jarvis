@@ -21,7 +21,8 @@ export function onFleetEvent(fn) {
 function record(sessionID) {
   let w = workers.get(sessionID);
   if (!w) {
-    w = { sessionID, task: "", state: "idle", tools: [], transcript: "", reasoning: "", pending: null, model: null };
+    // chain: root worker of a delegation chain; round: follow-ups so far.
+    w = { sessionID, task: "", state: "idle", tools: [], transcript: "", reasoning: "", pending: null, model: null, chain: sessionID, round: 0 };
     workers.set(sessionID, w);
   }
   return w;
@@ -35,6 +36,7 @@ function workerEvent(sessionID) {
     agent: w.agent ?? "build",
     state: w.state,
     toolCount: w.tools.length,
+    round: w.round,
     pending: w.pending ? { requestID: w.pending.requestID, action: w.pending.action, resources: w.pending.resources } : null,
   };
 }
@@ -176,7 +178,7 @@ async function listAllMessages(client, sessionID) {
     for (const x of (m.data ?? [])) {
       if (x?.id && !seen.has(x.id)) { seen.add(x.id); out.push(x); }
     }
-    cursor = m.cursor;
+    cursor = typeof m.cursor === "string" ? m.cursor : m.cursor?.next ?? null;
     if (!cursor) break;
   }
   return out;
@@ -207,94 +209,152 @@ export async function ensureFleetPump(onEvent) {
   if (pumpStarted) return;
   pumpStarted = true;
   const { client } = await ensureClient();
-  const sub = client.event.subscribe();
+  const emit = (msg) => { for (const fn of listeners) { try { fn({ ...msg, snapshot: snapshot() }); } catch {} } };
+  // The server stream ends or throws when the connection drops; without a
+  // reconnect the ring freezes silently. Back off up to 30s, reset on traffic.
   (async () => {
-    for await (const ev of sub) {
-      const d = ev.data ?? {};
-      const sid = d.sessionID;
-      if (!sid) continue;
-      if (!workers.has(sid)) continue;
-      const w = record(sid);
-      const emit = (msg) => { for (const fn of listeners) { try { fn({ ...msg, snapshot: snapshot() }); } catch {} } };
-      switch (ev.type) {
-        case "session.tool.input.started":
-          w.tools.push({ id: d.id, name: d.name, state: "input" });
-          w.state = w.pending ? "permission" : "working";
-          emit({ kind: "worker.tool", sessionID: sid, tool: d.name ?? d.id, state: "start" });
-          break;
-        case "session.tool.input.ended":
-          break;
-        case "session.tool.called":
-          w.state = "working";
-          emit({ kind: "worker.tool", sessionID: sid, tool: d.id, state: "start" });
-          if (d.name === "question" || (d.id ?? "").includes("question")) {
-            refreshForms(sid).then((forms) => {
-              if (forms.length > 0) {
-                w.state = "working";
-                emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
-              }
-            }).catch(() => {});
-            setTimeout(() => {
-              refreshForms(sid).then((forms) => {
-                if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
-              }).catch(() => {});
-            }, 4000);
-          }
-          break;
-        case "session.tool.progress":
-          break;
-        case "session.tool.success":
-        case "session.tool.error": {
-          const t = w.tools.find((t) => t.id === d.id);
-          if (t) t.state = ev.type === "session.tool.success" ? "done" : "error";
-          if (!w.pending) w.state = "idle";
-          emit({ kind: "worker.tool", sessionID: sid, tool: d.id, state: "idle" });
-          break;
-        }
-        case "session.text.delta":
-          if (d.delta) {
-            const chunk = typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
-            w.transcript += chunk;
-            emit({ kind: "worker.stream", sessionID: sid, delta: chunk });
-          }
-          break;
-        case "session.reasoning.delta":
-          if (d.delta) w.reasoning += typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
-          break;
-        case "permission.asked": {
-          const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [] };
-          w.pending = req;
-          w.state = "permission";
-          pendingPermissions.set(d.id, req);
-          emit({ kind: "permission.waiting", request: req });
-          break;
-        }
-        case "permission.replied": {
-          pendingPermissions.delete(d.requestID);
-          if (w.pending?.requestID === d.requestID) w.pending = null;
-          if (w.state === "permission") w.state = "working";
-          emit({ kind: "permission.resolved", sessionID: sid, requestID: d.requestID, reply: d.reply });
-          break;
-        }
-        case "session.execution.succeeded":
-          if (!w.pending) w.state = "done";
-          emit({ kind: "worker.done", sessionID: sid, status: "ok" });
-          break;
-        case "session.execution.failed":
-          w.state = "failed";
-          emit({ kind: "worker.done", sessionID: sid, status: "failed", error: d.error });
-          break;
-        default:
-          if (ev.type.startsWith("form.")) {
-            refreshForms(sid).then((forms) => {
-              if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
-              else emit({ kind: "form.resolved", sessionID: sid });
-            }).catch(() => {});
-          }
-          break;
+    let failures = 0;
+    for (;;) {
+      try {
+        await pumpOnce(client, emit, () => { failures = 0; });
+      } catch (err) {
+        console.error("fleet pump error:", err?.message ?? err);
       }
+      failures += 1;
+      emit({ kind: "fleet.pump", state: "reconnecting", attempt: failures });
+      await new Promise((r) => setTimeout(r, Math.min(30000, 500 * 2 ** Math.min(failures, 6))));
     }
   })();
+}
+
+export async function pumpOnce(client, emit, onTraffic = () => {}) {
+  const sub = client.event.subscribe();
+  let first = true;
+  for await (const ev of sub) {
+    onTraffic();
+    if (first) {
+      first = false;
+      reconcileWorkers(client, emit).catch(() => {});
+    }
+    handleFleetEvent(ev, emit);
+  }
+}
+
+// One worker.done per execution. finishedAt guards against the live event and
+// a reconcile both reporting the same run.
+function finishWorker(w, status, error, emit) {
+  if (w.finishedAt && w.finishedAt >= (w.promptedAt ?? 0)) return;
+  w.finishedAt = Date.now();
+  emit({ kind: "worker.done", sessionID: w.sessionID, status, error, round: w.round, chain: w.chain, agent: w.agent ?? "build", review: w.state !== "stopped" });
+}
+
+// After a (re)connect, events from the gap are gone. A worker the ring still
+// shows as running whose session went idle since its last prompt finished
+// while we were away: report it now so the review loop still sees it.
+export async function reconcileWorkers(client, emit) {
+  for (const w of [...workers.values()]) {
+    if (!["working", "idle", "permission"].includes(w.state)) continue;
+    const info = await client.session.get({ sessionID: w.sessionID }).catch(() => null);
+    const idle = info?.time?.idle;
+    if (!idle || idle < (w.promptedAt ?? 0) || !info.outcome) continue;
+    if (info.outcome === "interrupted") {
+      w.state = "stopped";
+      continue;
+    }
+    w.state = info.outcome === "succeeded" ? "done" : "failed";
+    finishWorker(w, info.outcome === "succeeded" ? "ok" : "failed", null, emit);
+  }
+}
+
+// One server event → worker state + deck events. Exported for tests.
+export function handleFleetEvent(ev, emit) {
+  const d = ev.data ?? {};
+  const sid = d.sessionID;
+  if (!sid) return;
+  if (!workers.has(sid)) return;
+  const w = record(sid);
+  switch (ev.type) {
+    case "session.tool.input.started":
+      w.tools.push({ id: d.id, name: d.name, state: "input" });
+      w.state = w.pending ? "permission" : "working";
+      emit({ kind: "worker.tool", sessionID: sid, tool: d.name ?? d.id, state: "start" });
+      break;
+    case "session.tool.input.ended":
+      break;
+    case "session.tool.called":
+      w.state = "working";
+      emit({ kind: "worker.tool", sessionID: sid, tool: d.id, state: "start" });
+      if (d.name === "question" || (d.id ?? "").includes("question")) {
+        refreshForms(sid).then((forms) => {
+          if (forms.length > 0) {
+            w.state = "working";
+            emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+          }
+        }).catch(() => {});
+        setTimeout(() => {
+          refreshForms(sid).then((forms) => {
+            if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+          }).catch(() => {});
+        }, 4000);
+      }
+      break;
+    case "session.tool.progress":
+      break;
+    case "session.tool.success":
+    case "session.tool.error": {
+      const t = w.tools.find((t) => t.id === d.id);
+      if (t) t.state = ev.type === "session.tool.success" ? "done" : "error";
+      if (!w.pending) w.state = "idle";
+      emit({ kind: "worker.tool", sessionID: sid, tool: d.id, state: "idle" });
+      break;
+    }
+    case "session.text.delta":
+      if (d.delta) {
+        const chunk = typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
+        w.transcript += chunk;
+        emit({ kind: "worker.stream", sessionID: sid, delta: chunk });
+      }
+      break;
+    case "session.reasoning.delta":
+      if (d.delta) w.reasoning += typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
+      break;
+    case "permission.asked": {
+      const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [] };
+      w.pending = req;
+      w.state = "permission";
+      pendingPermissions.set(d.id, req);
+      emit({ kind: "permission.waiting", request: req });
+      break;
+    }
+    case "permission.replied": {
+      pendingPermissions.delete(d.requestID);
+      if (w.pending?.requestID === d.requestID) w.pending = null;
+      if (w.state === "permission") w.state = "working";
+      emit({ kind: "permission.resolved", sessionID: sid, requestID: d.requestID, reply: d.reply });
+      break;
+    }
+    case "session.execution.succeeded":
+      if (!w.pending) w.state = "done";
+      finishWorker(w, "ok", null, emit);
+      break;
+    case "session.execution.failed":
+      w.state = "failed";
+      finishWorker(w, "failed", d.error, emit);
+      break;
+    case "session.execution.interrupted":
+      // Stop button or server interrupt: the user is steering, never review it.
+      w.state = "stopped";
+      emit({ kind: "worker.done", sessionID: sid, status: "interrupted", round: w.round, chain: w.chain, agent: w.agent ?? "build", review: false });
+      break;
+    default:
+      if (ev.type.startsWith("form.")) {
+        refreshForms(sid).then((forms) => {
+          if (forms.length > 0) emit({ kind: "form.waiting", sessionID: sid, forms: forms.map(publicForm) });
+          else emit({ kind: "form.resolved", sessionID: sid });
+        }).catch(() => {});
+      }
+      break;
+  }
 }
 
 export function resolveWorkerModel() {
@@ -322,9 +382,26 @@ export async function spawnWorker(task, opts = {}) {
   w.agent = agent;
   w.model = model;
   w.state = "idle";
+  w.chain = opts.chain ?? session.id;
+  w.round = opts.round ?? 0;
+  w.promptedAt = Date.now();
   await ensureFleetPump(opts.onEvent);
   await client.session.prompt({ sessionID: session.id, text: task });
   return { sessionID: session.id, model };
+}
+
+// Next step for an existing worker, same session and context. Counts as a
+// round of its chain so the review loop is bounded.
+export async function followUpWorker(sessionID, task) {
+  const w = workers.get(sessionID);
+  if (!w) throw new Error(`followup: unknown worker ${sessionID}`);
+  if (!task || typeof task !== "string") throw new Error("followup: task required");
+  const { client } = await ensureClient();
+  w.round = (w.round ?? 0) + 1;
+  w.state = "working";
+  w.promptedAt = Date.now();
+  await client.session.prompt({ sessionID, text: task });
+  return { ok: true, sessionID, round: w.round };
 }
 
 export async function stopWorker(sessionID) {

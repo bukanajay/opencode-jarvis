@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -26,6 +26,7 @@ export const DEFAULTS = {
   wake: "jarvis",
   voiceMode: "off",
   autoMode: "off",
+  reviewMode: "on",
   defaultAgent: "build",
   jarvisModel: "opencode-go/gpt-6-luna",
   workerModel: "opencode/fledge-alpha-free",
@@ -65,6 +66,7 @@ const KEY_OF = {
   "set.wake": "wake",
   "set.voiceMode": "voiceMode",
   "set.autoMode": "autoMode",
+  "set.reviewMode": "reviewMode",
   "set.defaultAgent": "defaultAgent",
   "set.jarvisModel": "jarvisModel",
   "set.workerModel": "workerModel",
@@ -94,6 +96,7 @@ function validate(name, args) {
       break;
     case "set.voiceMode":
     case "set.autoMode":
+    case "set.reviewMode":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
       break;
     case "set.defaultAgent":
@@ -157,6 +160,9 @@ export function matchAppCommand(text) {
   }
   if ((m = t.match(/^(?:turn |set )?auto mode (on|off)$/))) {
     return { name: "set.autoMode", args: { value: m[1] } };
+  }
+  if ((m = t.match(/^(?:turn |set )?review mode (on|off)$/))) {
+    return { name: "set.reviewMode", args: { value: m[1] } };
   }
   if ((m = t.match(/^set default agent to ([a-z0-9-]+)$/)) || (m = t.match(/^use ([a-z0-9-]+) as default agent$/))) {
     return { name: "set.defaultAgent", args: { value: m[1] } };

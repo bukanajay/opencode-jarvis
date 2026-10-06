@@ -10,6 +10,7 @@ import { runTurn, isQuotaError, READONLY_PERMISSIONS, BRAIN_AGENT } from "../tur
 import { getFleetRegistry } from "../autoroute.js";
 import { JARVIS_MODEL, JARVIS_FALLBACK_MODEL, parseModelRef } from "../sessions.js";
 import { loadMemory, remember, recall, extractCandidates } from "./memory.js";
+import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
 
 let brainSessionID = null;
@@ -75,40 +76,53 @@ const BrainState = Annotation.Root({
 });
 
 // Act convention: think may emit single-line ```dispatch {"task": "...", "agent": "optional-id"}```
-// fences, one per task. Single-line only, so the streamer can hold them back and
-// the transcript stays readable. Only this shape executes; everything else is
-// words. Malformed fences are ignored with a warning, never executed.
-const DISPATCH_RE = /^```dispatch\s+(.+?)\s*```[ \t]*$/gm;
-const DISPATCH_LINE = /^\s*```dispatch\s+\{.*\}\s*```\s*$/;
+// fences, one per task; a review turn may instead emit ```followup {"task": "..."}```
+// to send the reporting worker its next step. Single-line only, so the streamer
+// can hold them back and the transcript stays readable. Only these shapes
+// execute; everything else is words. Malformed fences are ignored with a
+// warning, never executed.
+const FENCE_RE = /^```(dispatch|followup)\s+(.+?)\s*```[ \t]*$/gm;
+const DISPATCH_LINE = /^\s*```(?:dispatch|followup)\s+\{.*\}\s*```\s*$/;
 
-export function parseDispatches(reply) {
+function parseFences(reply, kind, allowed) {
   const out = [];
   const warnings = [];
-  for (const m of String(reply ?? "").matchAll(DISPATCH_RE)) {
+  for (const m of String(reply ?? "").matchAll(FENCE_RE)) {
+    if (m[1] !== kind) continue;
     let spec;
     try {
-      spec = JSON.parse(m[1].trim());
+      spec = JSON.parse(m[2].trim());
     } catch {
-      warnings.push(`ignoring malformed dispatch fence: ${m[1].trim().slice(0, 80)}`);
+      warnings.push(`ignoring malformed ${kind} fence: ${m[2].trim().slice(0, 80)}`);
       continue;
     }
     const task = String(spec?.task ?? "").trim();
     if (!task || task.length > 2000 || task.includes("\n")) {
-      warnings.push(`ignoring dispatch with bad task (empty, multiline, or >2000 chars)`);
+      warnings.push(`ignoring ${kind} with bad task (empty, multiline, or >2000 chars)`);
       continue;
     }
     const agent = spec?.agent == null ? null : String(spec.agent).trim().toLowerCase();
     if (agent && !/^[a-z0-9-]{1,48}$/.test(agent)) {
-      warnings.push(`ignoring dispatch with bad agent id: ${JSON.stringify(spec.agent)}`);
+      warnings.push(`ignoring ${kind} with bad agent id: ${JSON.stringify(spec.agent)}`);
       continue;
     }
-    if (spec && typeof spec === "object" && Object.keys(spec).some((k) => k !== "task" && k !== "agent")) {
-      warnings.push(`ignoring dispatch with extra keys: ${Object.keys(spec).join(",")}`);
+    if (spec && typeof spec === "object" && Object.keys(spec).some((k) => !allowed.includes(k))) {
+      warnings.push(`ignoring ${kind} with extra keys: ${Object.keys(spec).join(",")}`);
       continue;
     }
-    out.push({ task, agent });
+    out.push(kind === "dispatch" ? { task, agent } : { task });
   }
+  return { out, warnings };
+}
+
+export function parseDispatches(reply) {
+  const { out, warnings } = parseFences(reply, "dispatch", ["task", "agent"]);
   return { dispatches: out, warnings };
+}
+
+export function parseFollowups(reply) {
+  const { out, warnings } = parseFences(reply, "followup", ["task"]);
+  return { followups: out, warnings };
 }
 
 export function stripDispatches(reply) {
@@ -145,6 +159,30 @@ export function buildThinkPrompt(text, memories, registry) {
   return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
 }
 
+// One streamed turn on the brain session, fences held back from the stream.
+// Quota/rate-limit failures retry once on the fallback model.
+async function brainTurn(prompt, onDelta, files) {
+  const sessionID = await ensureBrainSession(process.cwd());
+  const filter = fencedFilter((d) => onDelta?.(d));
+  const turn = (sid) => runTurn(sid, prompt, { onDelta: (d) => filter.push(d), files });
+  let r = await turn(sessionID);
+  if (r.status === "failed" && isQuotaError(r.error)) {
+    r = await turn(await createBrainSession(process.cwd(), JARVIS_FALLBACK_MODEL));
+  }
+  filter.flush();
+  return r;
+}
+
+// The brain is one session: user turns and worker reviews must not overlap,
+// or their streams interleave in one deck bubble and the server queues
+// prompts on a busy session. Every brain entry point goes through here.
+let queue = Promise.resolve();
+export function serialize(fn) {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => {});
+  return run;
+}
+
 function buildGraph(handlers) {
   const g = new StateGraph(BrainState);
   g.addNode("recall", async (state) => {
@@ -155,14 +193,7 @@ function buildGraph(handlers) {
     const { client } = await ensureClient();
     const registry = await getFleetRegistry(client, process.cwd()).catch(() => []);
     const prompt = buildThinkPrompt(state.text, state.memories, registry);
-    const sessionID = await ensureBrainSession(process.cwd());
-    const filter = fencedFilter((d) => handlers.onDelta?.(d));
-    const turn = (sid) => runTurn(sid, prompt, { onDelta: (d) => filter.push(d), files: state.files });
-    let r = await turn(sessionID);
-    if (r.status === "failed" && isQuotaError(r.error)) {
-      r = await turn(await createBrainSession(process.cwd(), JARVIS_FALLBACK_MODEL));
-    }
-    filter.flush();
+    const r = await brainTurn(prompt, handlers.onDelta, state.files);
     return { reply: r.text, status: r.status };
   });
   g.addNode("act", async (state) => {
@@ -191,9 +222,44 @@ function buildGraph(handlers) {
 }
 
 // One brain turn: memory in, streamed reply out, dispatch intents + facts out.
-export async function brainRespond(text, onDelta, opts = {}) {
-  compiled = buildGraph({ onDelta });
-  const out = await compiled.invoke({ text, files: opts.files ?? [] });
-  compiled = null;
-  return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [] };
+export function brainRespond(text, onDelta, opts = {}) {
+  return serialize(async () => {
+    compiled = buildGraph({ onDelta });
+    const out = await compiled.invoke({ text, files: opts.files ?? [] });
+    compiled = null;
+    return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [] };
+  });
+}
+
+// Pure decision over a review reply: at most one fence acts, and none once
+// the chain is out of rounds. Followups win over dispatches when both appear.
+export function decideReview(reply, round, maxRounds = MAX_ROUNDS) {
+  const f = parseFollowups(reply);
+  const d = parseDispatches(reply);
+  const warnings = [...f.warnings, ...d.warnings];
+  const fences = f.followups.length + d.dispatches.length;
+  if (fences > 0 && round >= maxRounds) {
+    return { followup: null, dispatch: null, warnings: [...warnings, `round limit ${maxRounds} reached; ignoring ${fences} fence(s)`] };
+  }
+  if (fences > 1) warnings.push(`review emitted ${fences} fences; acting on the first only`);
+  const followup = f.followups[0] ?? null;
+  const dispatch = followup ? null : d.dispatches[0] ?? null;
+  return { followup, dispatch, warnings };
+}
+
+// Review turn for a finished worker: report in, streamed verdict out, at most
+// one next step (followup to the same worker, or a new dispatch). Execution
+// stays in main, like brainRespond.
+export function brainReview(report, onDelta) {
+  return serialize(async () => {
+    const { client } = await ensureClient();
+    const [memories, registry] = await Promise.all([
+      recall(loadMemory(), report.task).then((fs) => fs.map((f) => f.text)).catch(() => []),
+      getFleetRegistry(client, process.cwd()).catch(() => []),
+    ]);
+    const r = await brainTurn(buildReviewPrompt(report, { memories, registry }), onDelta);
+    if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [] };
+    const decision = decideReview(r.text, report.round);
+    return { reply: stripDispatches(r.text), status: r.status, modelUsed: brainModelUsed, ...decision };
+  });
 }

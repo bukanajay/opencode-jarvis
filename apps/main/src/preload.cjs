@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("jarvis", {
   fleetDelete: (sessionID) => ipcRenderer.invoke("fleet.delete", { sessionID }),
   permissionRespond: (requestID, decision) => ipcRenderer.invoke("permission.respond", { requestID, decision }),
   onFleetState: (fn) => ipcRenderer.on("fleet.state", (_e, payload) => fn(payload)),
+  onWorkerReport: (fn) => ipcRenderer.on("worker.report", (_e, payload) => fn(payload)),
+  onFleetPump: (fn) => ipcRenderer.on("fleet.pump", (_e, payload) => fn(payload)),
   onWorkerStream: (fn) => ipcRenderer.on("worker.stream", (_e, payload) => fn(payload)),
   onTool: (fn) => ipcRenderer.on("session.tool", (_e, payload) => fn(payload)),
   onPermission: (fn) => ipcRenderer.on("permission.waiting", (_e, payload) => fn(payload)),

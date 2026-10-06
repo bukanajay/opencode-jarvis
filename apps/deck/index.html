@@ -723,6 +723,19 @@
     if (modelUsed) $("h-model").textContent = `${modelUsed.id}${modelUsed.id === "gpt-6-luna" ? "" : "*"}`;
     (status === "ok" ? sndDone : sndFault)();
   });
+  // Worker reported back: close any open bubble so Jarvis's review gets its own.
+  window.jarvis?.onWorkerReport(({ report }) => {
+    streamBody = null;
+    streamMeta = null;
+    addSys(`▸ ${report.headline} · ${report.sessionID.slice(0, 8)}${report.round ? ` · round ${report.round}` : ""}`, { bad: report.status !== "ok" });
+    showWorking();
+  });
+  let pumpNoticeAt = 0;
+  window.jarvis?.onFleetPump(({ attempt }) => {
+    if (Date.now() - pumpNoticeAt < 30000) return;
+    pumpNoticeAt = Date.now();
+    addSys(`fleet event stream lost — reconnecting (attempt ${attempt})`, { bad: true });
+  });
   window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
   window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; addYou(text, { name: "You · speech" }); });
   window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
