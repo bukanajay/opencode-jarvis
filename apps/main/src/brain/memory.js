@@ -1,6 +1,7 @@
 // Long-term memory: local JSON, no server involved. Facts are short durable
-// strings ("user prefers amber", "reviewer agent exists"). Recall is keyword
-// overlap — good enough for core; embeddings are a later slice.
+// strings ("user prefers amber", "reviewer agent exists"). Recall is
+// embedding-first (local MiniLM) with BM25 fallback; only LLM fact
+// extraction remains a later slice.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

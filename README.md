@@ -172,17 +172,18 @@ hardware-validation work is listed in `ROADMAP.md`.
 
 * `apps/main/src/brain/memory.js`: local long-term memory
   (`~/.config/jarvis/memory.json`, `JARVIS_MEMORY_FILE` override). Facts with
-  keyword recall, heuristic extraction (`remember…`, `my X is Y`, `I prefer…`).
-  No embeddings yet — recorded as a later slice.
+  local-embedding recall first (MiniLM) and BM25 fallback; extraction stays
+  heuristic (`remember…`, `my X is Y`, `I prefer…`) — LLM extraction is the
+  remaining later slice.
 * `apps/main/src/brain/brain.js`: LangGraph (`@langchain/langgraph`)
   recall → think → persist. Think reasons through an OpenCode session, so Luna
   stays the default and switching is validated against the OpenCode model list
   (`JARVIS_BRAIN_MODEL` or `setBrainModel`), no new provider keys. Quota fallback
   preserved. The deck prompt path now runs through the graph with a direct-turn
   fallback if the graph throws.
-* Pending (tracked in ROADMAP.md, not forgotten): embeddings/LLM fact
-  extraction for memory (heuristic keywords only today), narrower default
-  permissions for created agents, M5 live-mic verification.
+* Pending (tracked in ROADMAP.md, not forgotten): LLM fact extraction for
+  memory (heuristic regex only today), M5 live-mic verification (16 kHz/VAD
+  tuning unverified).
 
 ## Voice, bootstrap, auto (done 2026-10-06, three parallel slices + integration)
 

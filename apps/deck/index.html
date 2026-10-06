@@ -104,6 +104,16 @@
     font-size: 13.5px;
   }
   #log .sys { color: var(--dim); font-family: var(--cap); font-size: 11px; }
+  .msg { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 9px 2px; border-bottom: 1px solid rgba(120, 150, 140, 0.09); animation: cardin 160ms ease; }
+  .msg .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; }
+  .msg.you .dot { background: #7dd3fc; box-shadow: 0 0 8px rgba(125, 211, 252, 0.5); }
+  .msg.jarvis .dot { background: var(--accent); box-shadow: 0 0 8px rgba(200, 240, 74, 0.45); }
+  .msg .meta { font-family: var(--cap); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); margin-bottom: 2px; }
+  .msg .meta .t { opacity: 0.75; letter-spacing: 0.04em; }
+  .msg .body { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+  .msg .tag { font-family: var(--cap); font-size: 10px; color: var(--dim); margin-top: 4px; }
+  .msg.sysmsg { display: block; text-align: center; font-family: var(--cap); font-size: 11px; color: var(--dim); padding: 6px 2px; border-bottom: 0; }
+  .msg.sysmsg.bad { color: var(--danger); }
   /* Work view is a popup over the deck, opened by clicking a fleet node. */
   #work { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(3, 5, 6, 0.7); padding: 6vh 6vw; border: 0; border-radius: 0; }
   #work.show { display: block; }
@@ -295,7 +305,11 @@
   const $ = (id) => document.getElementById(id);
   const ring = $("ring"), log = $("log"), cap = $("caption");
   if (!window.jarvis) {
-    log.textContent = "[fault] bridge missing: preload did not load. Quit and relaunch the app.\n";
+    log.textContent = "";
+    const row = document.createElement("div");
+    row.className = "msg sysmsg bad";
+    row.textContent = "fault · bridge missing: preload did not load. Quit and relaunch the app.";
+    log.appendChild(row);
   }
   const ACCENT_FALLBACK = "#c8f04a";
   let workers = [], selected = null, transcripts = {}, traces = {};
@@ -578,22 +592,71 @@
   });
   window.jarvis?.onPermissionResolved(() => { unmountCard("perm"); $("perm").classList.remove("show"); sndDone(); });
   const scrollLog = () => { log.scrollTop = log.scrollHeight; };
+  const fmtT = (t) => new Date(t ?? Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  // Chat model: every line knows who said it and when. Streaming appends into
+  // one open Jarvis bubble; system events are centered dim rows.
+  let streamBody = null, streamMeta = null;
+  function addMsg(from, text, opts = {}) {
+    const row = document.createElement("div");
+    row.className = "msg " + from;
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const main = document.createElement("div");
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = (opts.name ?? (from === "you" ? "You" : "Jarvis")) + "  ";
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = fmtT(opts.at);
+    meta.appendChild(t);
+    const body = document.createElement("div");
+    body.className = "body";
+    body.textContent = text ?? "";
+    main.appendChild(meta);
+    main.appendChild(body);
+    row.appendChild(dot);
+    row.appendChild(main);
+    log.appendChild(row);
+    scrollLog();
+    return { row, body, meta };
+  }
+  const addYou = (text, opts) => addMsg("you", text, opts);
+  function addSys(text, opts = {}) {
+    const row = document.createElement("div");
+    row.className = "msg sysmsg" + (opts.bad ? " bad" : "");
+    row.textContent = text;
+    log.appendChild(row);
+    scrollLog();
+    return row;
+  }
   const showWorking = () => { busy = true; $("working").classList.add("show"); scrollLog(); };
   const hideWorking = () => { busy = false; $("working").classList.remove("show"); };
-  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; hideWorking(); scrollLog(); });
+  window.jarvis?.onStream(({ delta }) => {
+    if (!streamBody) {
+      const m = addMsg("jarvis", "");
+      streamBody = m.body;
+      streamMeta = m.meta;
+    }
+    streamBody.textContent += delta;
+    hideWorking();
+    scrollLog();
+  });
   window.jarvis?.onDone(({ modelUsed, status }) => {
     hideWorking();
-    const line = `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;
-    const s = document.createElement("span");
-    s.className = "sys";
-    s.textContent = line;
-    log.appendChild(s);
+    if (streamBody && streamMeta) {
+      const tag = document.createElement("div");
+      tag.className = "tag";
+      tag.textContent = `${status} · ${modelUsed?.providerID}/${modelUsed?.id}`;
+      streamMeta.parentElement.appendChild(tag);
+    }
+    streamBody = null;
+    streamMeta = null;
     scrollLog();
     if (modelUsed) $("h-model").textContent = `${modelUsed.id}${modelUsed.id === "gpt-6-luna" ? "" : "*"}`;
     (status === "ok" ? sndDone : sndFault)();
   });
   window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
-  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; log.textContent += "\n> (speech) " + text + "\n"; });
+  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; addYou(text, { name: "You · speech" }); });
   window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
 
   const auditEl = () => document.getElementById("audit");
@@ -611,7 +674,7 @@
     paintSettings(settings);
     const el = auditEl();
     if (el) el.textContent += auditRow(entry) + "\n";
-    log.textContent += `\n[settings] ${entry.what} — live\n`;
+    addSys(`settings · ${entry.what} — live`);
     sndDone();
   });
   window.jarvis?.settingsGet().then((r) => {
@@ -660,11 +723,11 @@
   const cfgHide = () => { unmountCard("cfg"); $("cfg").style.display = "none"; };
   window.jarvis?.onConfigApplied(({ entry, note }) => {
     cfgHide(); sndDone();
-    log.textContent += `\n[config] ${entry.what} — ${note ?? "live"}\n`;
+    addSys(`config · ${entry.what} — ${note ?? "live"}`);
     const el = document.getElementById("audit");
     if (el && entry) el.textContent += `[${new Date(entry.at).toLocaleTimeString()}] ${entry.bucket}: ${entry.what}\n`;
   });
-  window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
+  window.jarvis?.onConfigDiscarded(() => { cfgHide(); addSys("config · discarded, nothing written"); });
   $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
   $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
   // Bootstrap: empty fleet -> staged Q&A on a blocking card. Option chips answer,
@@ -687,9 +750,9 @@
   });
   window.jarvis?.onBootstrapDone(({ name, note, sessionID }) => {
     unmountCard("boot"); sndDone();
-    log.textContent += `\n[agent] ${note}\n[worker ${String(sessionID).slice(0, 8)} on ${name}]\n`;
+    addSys(`agent · ${note} · worker ${String(sessionID).slice(0, 8)} on ${name}`);
   });
-  window.jarvis?.onBootstrapCancelled(() => { unmountCard("boot"); log.textContent += "\n[agent] bootstrap discarded\n"; });
+  window.jarvis?.onBootstrapCancelled(() => { unmountCard("boot"); addSys("agent · bootstrap discarded"); });
 
   window.jarvis?.onFormWaiting(({ sessionID, forms }) => {
     sndPermission();
@@ -788,9 +851,9 @@
   };
   function spawnNote(r) {
     if (!r) return;
-    if (r.needBootstrap) log.textContent += "\n[no agent yet — answer on the card]\n";
-    else if (!r.ok) log.textContent += `\n[fault] ${r.reason ?? "spawn failed"}\n`;
-    else if (r.reason) log.textContent += `\n[${r.reason} → ${r.agent}]\n`;
+    if (r.needBootstrap) addSys("no agent yet — answer on the card");
+    else if (!r.ok) addSys(`fault · ${r.reason ?? "spawn failed"}`, { bad: true });
+    else if (r.reason) addSys(`fleet · ${r.reason} → ${r.agent}`);
   }
   $("stop").onclick = async () => { await window.jarvis.fleetStop(); };
   $("work-stop").onclick = async () => { if (selected) await window.jarvis.fleetStop(selected); };
@@ -801,7 +864,7 @@
     await window.jarvis.sessionRename(selected, title);
     window.jarvis.fleetList().then((r) => renderRing(r.workers));
   };
-  $("work-fork").onclick = async () => { if (selected) { const r = await window.jarvis.sessionFork(selected); log.textContent += `\n[forked ${r.forkID}]\n`; } };
+  $("work-fork").onclick = async () => { if (selected) { const r = await window.jarvis.sessionFork(selected); addSys(`forked ${r.forkID}`); } };
   $("work-diff").onclick = async () => {
     if (!selected) return;
     const r = await window.jarvis.sessionDiff(selected);
@@ -811,10 +874,10 @@
   $("work-undo").onclick = async () => {
     if (!selected) return;
     const r = await window.jarvis.sessionUndo(selected);
-    log.textContent += `\n[undone, redo branch ${r.redoID}]\n`;
+    addSys(`undone · redo branch ${r.redoID}`);
     $("work-diff").textContent = "";
   };
-  $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); log.textContent += "\n[compacted]\n"; } };
+  $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); addSys("compacted"); } };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work-x").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work").addEventListener("click", (e) => { if (e.target === $("work")) { selected = null; $("work").classList.remove("show"); } });
@@ -896,20 +959,20 @@
     const text = $("q").value.trim();
     if (!text) return;
     $("q").value = "";
-    log.textContent += "\n> " + text + "\n";
+    addYou(text);
     scrollLog();
     const m = text.match(/^launch worker:\s*(.+)/i);
     if (m) { showWorking(); spawnNote(await window.jarvis.fleetSpawn(m[1])); hideWorking(); scrollLog(); return; }
     const files = staged ? [{ uri: staged.uri, name: staged.name }] : [];
-    if (staged) { log.textContent += `[attached ${staged.name}]\n`; staged = null; paintStaged(); }
+    if (staged) { addSys(`attached ${staged.name}`); staged = null; paintStaged(); }
     showWorking();
     const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files })
       .catch((e) => ({ ok: false, reason: String(e.message ?? e) }));
-    if (!r?.ok) { hideWorking(); log.textContent += `\n[fault] ${r?.reason ?? "send failed"}\n`; sndFault(); scrollLog(); return; }
-    if (r?.control === "command" || r?.control === "skill") log.textContent += `\n[${r.control} ${r.name} sent]\n`;
-    if (r?.control === "app.command") log.textContent += `\n[settings] ${r.entry.what} — live\n`;
-    if (r?.control === "config.apply") log.textContent += `\n[config] ${r.note ?? r.name}\n`;
-    if (r?.control === "config.stage") log.textContent += `\n[config] staged — confirm on the card\n`;
+    if (!r?.ok) { hideWorking(); addSys(`fault · ${r?.reason ?? "send failed"}`, { bad: true }); sndFault(); scrollLog(); return; }
+    if (r?.control === "command" || r?.control === "skill") addSys(`${r.control} · ${r.name} sent`);
+    if (r?.control === "app.command") addSys(`settings · ${r.entry.what} — live`);
+    if (r?.control === "config.apply") addSys(`config · ${r.note ?? r.name}`);
+    if (r?.control === "config.stage") addSys("config · staged — confirm on the card");
     if (r && !("sessionID" in r)) hideWorking();
     scrollLog();
   });

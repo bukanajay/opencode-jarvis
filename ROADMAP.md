@@ -16,7 +16,6 @@ via OpenCode model list, no new keys). Local long-term memory.
   no agent named → default; auto on → Jarvis picks from task text + fleet registry
 - [x] Act: structured dispatch from think through autoroute + bootstrap gate
 
-Still open (not started): embeddings/LLM fact extraction for memory
-(heuristic keywords today), narrower default permissions for created agents
-(bootstrap allows are broad by decision, flagged at creation), M5 live-mic
-verification (binary drop-in proven on Intel only).
+Still open: LLM fact extraction for memory (extractCandidates is still
+heuristic regex today), M5 live-mic verification (binary drop-in proven on
+Intel only; 16 kHz resample / VAD tuning notes in helper.swift unverified).
