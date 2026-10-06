@@ -219,9 +219,6 @@
         <span><i style="background:#3a4a45"></i>idle</span>
         <span><i style="background:var(--danger)"></i>permission</span>
       </div>
-      <div class="row" style="margin-top:10px;">
-        <button class="ghost" id="spawn">Launch worker</button>
-      </div>
     </section>
     <section class="chat">
       <h2>Transcript</h2>
@@ -913,18 +910,6 @@
 
   $("allow").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "allow"); unmountCard("perm"); $("perm").classList.remove("show"); };
   $("deny").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "deny"); unmountCard("perm"); $("perm").classList.remove("show"); };
-  $("spawn").onclick = async () => {
-    const task = await askText({ title: "Launch worker", initial: "Run `ls` and report the first 3 entries. Do not edit files.", okLabel: "Launch" });
-    if (!task) return;
-    try {
-      const r = await window.jarvis.fleetSpawn(task);
-      spawnNote(r);
-      window.jarvis.fleetList().then((r) => renderRing(r.workers));
-    } catch (e) {
-      addSys(`fault · launch failed: ${e.message ?? e}`, { bad: true });
-      sndFault();
-    }
-  };
   function spawnNote(r) {
     if (!r) return;
     if (r.needBootstrap) addSys("no agent yet — answer on the card");
