@@ -30,6 +30,9 @@
     margin: 0;
     font-size: 14px;
     line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
   }
   body[data-density="compact"] { font-size: 13px; }
   body[data-density="compact"] section { padding: 8px 10px; }
@@ -53,9 +56,13 @@
     header .pulse, #mic.live { animation: none !important; }
   }
   main {
-    max-width: 1220px; margin: 0 auto; padding: 16px 20px 60px;
-    display: grid; gap: 14px;
+    max-width: 1220px; width: 100%; margin: 0 auto; padding: 16px 20px 24px;
+    display: flex; flex-direction: column; gap: 14px; flex: 1;
   }
+  .deck { flex: 1; min-height: 0; }
+  section.fleet { display: flex; flex-direction: column; }
+  #ring-wrap { flex: 1; min-height: 320px; display: flex; }
+  #ring-legend { margin-top: auto; padding-top: 8px; }
   body[data-layout="wide"] main { max-width: 1340px; }
   section {
     background: linear-gradient(180deg, var(--panel2), var(--panel));
@@ -91,7 +98,7 @@
   #drawer details { margin: 0; }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
   #ring-wrap { position: relative; }
-  #ring { width: 100%; height: 430px; display: block; border-radius: 8px; cursor: pointer; }
+  #ring { width: 100%; height: 100%; min-height: 320px; display: block; border-radius: 8px; cursor: pointer; }
   #ring-legend {
     display: flex; gap: 14px; margin-top: 8px;
     font-family: var(--cap); font-size: 10px; letter-spacing: 0.12em;
@@ -100,7 +107,7 @@
   #ring-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
   #log {
     white-space: pre-wrap; word-break: break-word;
-    min-height: 260px; max-height: 430px; overflow: auto;
+    min-height: 260px; overflow: auto;
     font-size: 13.5px;
   }
   #log .sys { color: var(--dim); font-family: var(--cap); font-size: 11px; }
@@ -211,7 +218,7 @@
 </header>
 <main>
   <div class="deck">
-    <section>
+    <section class="fleet">
       <h2>Fleet <span class="live" id="fleet-count"></span></h2>
       <div id="ring-wrap"><canvas id="ring"></canvas></div>
       <div id="ring-legend">
@@ -373,7 +380,7 @@
     const r = ring.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     ring.width = Math.max(1, Math.round(r.width * dpr));
-    ring.height = Math.round(430 * dpr);
+    ring.height = Math.max(1, Math.round((r.height || 430) * dpr));
     seedStars();
   }
   function layoutTargets() {
