@@ -138,7 +138,7 @@ async function dispatchTask(task, { agent, directory, chain, round } = {}, broad
     });
     if (fresh) workDir = fresh.directory;
   }
-  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: workDir, chain, round });
+  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: workDir, project: dir, chain, round });
   if (fresh) bindChain(res.sessionID, fresh);
   broadcast({ kind: "fleet.state", snapshot: snapshot() });
   return { ok: true, ...res, agent: agent ?? r.agent, branch: fresh?.branch ?? open?.branch ?? null, reason: r.reason ?? `default->${agent ?? r.agent}` };
@@ -258,7 +258,7 @@ async function reviewWorker(ev, broadcast) {
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     say(`[fleet] follow-up → ${report.agent} (${report.sessionID.slice(0, 8)}) round ${f.round}\n`);
   } else if (r.dispatch) {
-    const dr = await dispatchTask(r.dispatch.task, { agent: r.dispatch.agent, chain: report.chain, round: report.round + 1 }, broadcast);
+    const dr = await dispatchTask(r.dispatch.task, { agent: r.dispatch.agent, directory: report.project ?? undefined, chain: report.chain, round: report.round + 1 }, broadcast);
     if (dr.ok && !dr.needBootstrap) say(`[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})\n`);
     else if (!dr.ok) say(`[fleet] dispatch refused: ${dr.reason}\n`);
   }

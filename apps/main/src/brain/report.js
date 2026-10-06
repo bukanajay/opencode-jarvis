@@ -62,6 +62,7 @@ export function buildReport(worker, { messages, diff, status, error, worktree } 
   const files = summarizeDiff(diff);
   return {
     sessionID: worker.sessionID,
+    project: worker.project ?? null,
     agent: worker.agent ?? "build",
     task: worker.task ?? "",
     round: worker.round ?? 0,

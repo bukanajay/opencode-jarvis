@@ -160,8 +160,7 @@ export function buildThinkPrompt(text, memories, registry, project = null) {
 
 // One streamed turn on the brain session, fences held back from the stream.
 // Quota/rate-limit failures retry once on the fallback model.
-async function brainTurn(prompt, onDelta, files) {
-  const directory = projectDir();
+async function brainTurn(prompt, onDelta, files, directory = projectDir()) {
   const sessionID = await ensureBrainSession(directory);
   const filter = fencedFilter((d) => onDelta?.(d));
   const turn = (sid) => runTurn(sid, prompt, { onDelta: (d) => filter.push(d), files });
@@ -255,11 +254,13 @@ export function decideReview(reply, round, maxRounds = MAX_ROUNDS) {
 export function brainReview(report, onDelta) {
   return serialize(async () => {
     const { client } = await ensureClient();
+    // Review in the worker's own project, even if the user switched away.
+    const directory = report.project ?? projectDir();
     const [memories, registry] = await Promise.all([
-      recallAll(report.task).then((fs) => fs.map((f) => f.text)).catch(() => []),
-      getFleetRegistry(client, projectDir()).catch(() => []),
+      recallAll(report.task, 6, directory).then((fs) => fs.map((f) => f.text)).catch(() => []),
+      getFleetRegistry(client, directory).catch(() => []),
     ]);
-    const r = await brainTurn(buildReviewPrompt(report, { memories, registry }), onDelta);
+    const r = await brainTurn(buildReviewPrompt(report, { memories, registry }), onDelta, undefined, directory);
     if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [] };
     const decision = decideReview(r.text, report.round);
     return { reply: stripDispatches(r.text), status: r.status, modelUsed: brainModelUsed, ...decision };
