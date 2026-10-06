@@ -19,6 +19,7 @@
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  body { overflow: hidden; }
   html { scrollbar-color: var(--line) transparent; }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
@@ -68,7 +69,7 @@
   }
   main {
     max-width: 1220px; width: 100%; margin: 0 auto; padding: 16px 20px 24px;
-    display: flex; flex-direction: column; gap: 14px; flex: 1;
+    display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0;
   }
   .deck { flex: 1; min-height: 0; }
   .deck > section { min-height: 0; overflow: hidden; }
@@ -91,6 +92,7 @@
   .deck { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
   section.chat { display: flex; flex-direction: column; }
   section.chat #log { flex: 1; min-height: 0; }
+  section.chat #caption, section.chat #f { flex-shrink: 0; }
   #working { display: none; padding: 8px 0 0; }
   #working.show { display: block; }
   #working .tdot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: var(--accent); animation: tbounce 1.1s ease-in-out infinite; }
