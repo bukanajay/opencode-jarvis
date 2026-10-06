@@ -7,6 +7,7 @@ import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js"
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
+import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
 
 let shell = null;
@@ -231,6 +232,12 @@ app.whenReady().then(async () => {
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     return r;
   });
+  ipcMain.handle("term.start", async (_e, { command, timeout } = {}) => termStart(command, process.cwd(), timeout));
+  ipcMain.handle("term.output", async (_e, { id, cursor } = {}) => termOutput(id, process.cwd(), cursor));
+  ipcMain.handle("term.kill", async (_e, { id } = {}) => termKill(id, process.cwd()));
+  ipcMain.handle("pty.open", async () => ptyOpen(process.cwd()));
+  ipcMain.handle("pty.resize", async (_e, { ptyID, rows, cols } = {}) => ptyResize(ptyID, process.cwd(), rows, cols));
+  ipcMain.handle("pty.close", async (_e, { ptyID } = {}) => ptyClose(ptyID, process.cwd()));
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

@@ -83,6 +83,16 @@
     <button class="ghost" id="work-back">Back to deck</button></p>
     <div class="tools" id="work-diff"></div>
   </section>
+  <section id="yard" style="display:none;">
+    <h2>Yard — terminal</h2>
+    <pre id="term-out" class="res" style="white-space:pre-wrap;max-height:220px;overflow:auto;min-height:60px;"></pre>
+    <form id="term-f">
+      <input id="term-cmd" placeholder="shell command" />
+      <button type="submit">Run</button>
+      <button type="button" class="ghost" id="term-kill">Kill</button>
+    </form>
+  </section>
+  <p><button class="ghost" id="yard-toggle">Open yard</button></p>
   <section>
     <h2>Composer</h2>
     <div id="caption" aria-live="polite"></div>
@@ -343,6 +353,29 @@
     if (!r?.ok) cap.textContent = r?.reason ?? "mic stopped";
   };
   window.jarvis?.fleetList().then((r) => renderRing(r.workers));
+  // Yard: opened on purpose. Shell-backed run/poll/kill.
+  let termID = null, termTimer = null;
+  $("yard-toggle").onclick = () => {
+    const y = $("yard");
+    y.style.display = y.style.display === "none" ? "block" : "none";
+    $("yard-toggle").textContent = y.style.display === "none" ? "Open yard" : "Close yard";
+  };
+  async function termPoll() {
+    if (!termID) return;
+    const o = await window.jarvis.termOutput(termID);
+    if ((o.output ?? "").length > $("term-out").textContent.length) $("term-out").textContent = o.output;
+  }
+  $("term-f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cmd = $("term-cmd").value.trim();
+    if (!cmd) return;
+    const r = await window.jarvis.termStart(cmd);
+    termID = r.id;
+    $("term-out").textContent = `$ ${cmd}\n`;
+    clearInterval(termTimer);
+    termTimer = setInterval(termPoll, 1000);
+  });
+  $("term-kill").onclick = async () => { if (termID) { await window.jarvis.termKill(termID); termID = null; clearInterval(termTimer); } };
 </script>
 </body>
 </html>
