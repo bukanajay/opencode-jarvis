@@ -120,13 +120,25 @@
   #work .sheet {
     background: linear-gradient(180deg, var(--panel2), var(--panel));
     border: 1px solid var(--line); border-radius: 12px;
-    max-width: 720px; margin: 0 auto; padding: 16px 18px;
+    max-width: 1020px; margin: 0 auto; padding: 16px 18px;
     max-height: 88vh; overflow: auto;
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
     animation: cardin 180ms ease;
   }
   #work .bar { display: flex; align-items: center; justify-content: space-between; }
   #work .bar h2 { margin: 0; }
+  #work .statusline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+  #work .pill { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px; }
+  #work .tabs { display: flex; gap: 4px; margin: 10px 0 0; border-bottom: 1px solid var(--line); }
+  #work .tab { background: none; border: 0; border-radius: 0; color: var(--dim); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 12px; cursor: pointer; }
+  #work .tab.active { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+  #work .tabpanel { display: none; max-height: 44vh; overflow: auto; padding-top: 10px; }
+  #work .tabpanel.active { display: block; }
+  #work .filerow { display: flex; gap: 8px; align-items: center; width: 100%; background: none; border: 1px solid transparent; border-radius: 8px; color: var(--ink); font-weight: 400; text-align: left; padding: 7px 10px; cursor: pointer; }
+  #work .filerow:hover { border-color: var(--line); }
+  #work .filerow.sel { border-color: var(--accent); }
+  #work .filerow .st { font-family: var(--cap); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-left: auto; }
+  #work pre.patch { background: #04070a; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 300px; overflow: auto; font-family: var(--cap); font-size: 11.5px; white-space: pre-wrap; margin: 10px 0 0; }
   #work-task { font-weight: 600; margin-bottom: 6px; }
   #work-log { white-space: pre-wrap; max-height: 220px; overflow: auto; }
   .tools { font-family: var(--cap); font-size: 11.5px; color: var(--dim); white-space: pre-wrap; }
@@ -235,18 +247,21 @@
   <div class="sheet">
     <div class="bar"><h2>Work view</h2><button class="ghost" id="work-x" aria-label="Close">✕</button></div>
     <div id="work-task"></div>
-    <div class="tools" id="work-tools"></div>
-    <div id="work-log"></div>
-    <p class="row"><label class="res">agent <select id="work-agent"></select></label>
-    <label class="res">model <select id="work-model"></select></label></p>
+    <div class="statusline"><span class="pill" id="work-state">idle</span><label class="res">agent <select id="work-agent"></select></label><label class="res">model <select id="work-model"></select></label></div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="tabbtn-transcript" role="tab">Transcript</button>
+      <button class="tab" id="tabbtn-tools" role="tab">Tool trace</button>
+      <button class="tab" id="tabbtn-diff" role="tab">Diff</button>
+    </div>
+    <div class="tabpanel active" id="tab-transcript" role="tabpanel"><div id="work-log"></div></div>
+    <div class="tabpanel" id="tab-tools" role="tabpanel"><div class="tools" id="work-tools"></div></div>
+    <div class="tabpanel" id="tab-diff" role="tabpanel"><div id="work-files"></div><pre class="patch" id="work-patch" style="display:none"></pre></div>
     <p class="row"><button class="ghost" id="work-stop">Stop</button>
     <button class="ghost" id="work-rename">Rename</button>
     <button class="ghost" id="work-fork">Fork</button>
-    <button class="ghost" id="work-diff">Diff</button>
     <button class="ghost" id="work-undo">Undo last</button>
     <button class="ghost" id="work-compact">Compact</button>
     <button class="ghost" id="work-back">Close</button></p>
-    <div class="tools" id="work-diff"></div>
   </div>
   </section>
 
@@ -516,9 +531,15 @@
   function select(id) {
     selected = id;
     $("work").classList.add("show");
-    $("work-task").textContent = (workers.find((w) => w.id === id)?.task ?? id);
+    const w = workers.find((w) => w.id === id);
+    $("work-task").textContent = (w?.task ?? id);
+    $("work-state").textContent = w?.state ?? "idle";
+    workTab("transcript");
     $("work-log").textContent = transcripts[id] ?? "";
     $("work-tools").textContent = (traces[id] ?? []).join("\n");
+    workDiffCache = [];
+    $("work-files").innerHTML = "";
+    $("work-patch").style.display = "none";
     fillAgentModel();
   }
 
@@ -563,7 +584,13 @@
     } catch {}
   }
 
-  window.jarvis?.onFleetState(({ snapshot }) => renderRing(snapshot));
+  window.jarvis?.onFleetState(({ snapshot }) => {
+    renderRing(snapshot);
+    if (selected) {
+      const w = (snapshot ?? []).find((x) => x.id === selected);
+      if (w) $("work-state").textContent = w.pending ? "permission" : (w.state ?? "idle");
+    }
+  });
   window.jarvis?.onWorkerStream(({ sessionID, delta }) => {
     transcripts[sessionID] = (transcripts[sessionID] ?? "") + delta;
     if (selected === sessionID) $("work-log").textContent = transcripts[sessionID];
@@ -865,17 +892,73 @@
     window.jarvis.fleetList().then((r) => renderRing(r.workers));
   };
   $("work-fork").onclick = async () => { if (selected) { const r = await window.jarvis.sessionFork(selected); addSys(`forked ${r.forkID}`); } };
-  $("work-diff").onclick = async () => {
+  function workTab(name) {
+    for (const t of ["transcript", "tools", "diff"]) {
+      $("tabbtn-" + t).classList.toggle("active", t === name);
+      $("tab-" + t).classList.toggle("active", t === name);
+    }
+    if (name === "diff") loadWorkDiff();
+  }
+  $("tabbtn-transcript").onclick = () => workTab("transcript");
+  $("tabbtn-tools").onclick = () => workTab("tools");
+  $("tabbtn-diff").onclick = () => workTab("diff");
+  let workDiffCache = [];
+  async function loadWorkDiff() {
     if (!selected) return;
-    const r = await window.jarvis.sessionDiff(selected);
-    const files = r.diff?.data ?? r.diff ?? [];
-    $("work-diff").textContent = (Array.isArray(files) ? files : []).map((f) => `${f.file ?? f.path} (${f.status})`).join("\n") || "(clean)";
-  };
+    const box = $("work-files");
+    box.innerHTML = "";
+    $("work-patch").style.display = "none";
+    const loading = document.createElement("div");
+    loading.className = "res";
+    loading.textContent = "loading diff…";
+    box.appendChild(loading);
+    try {
+      const r = await window.jarvis.sessionDiff(selected);
+      const files = r.diff?.data ?? r.diff ?? [];
+      workDiffCache = Array.isArray(files) ? files : [];
+      box.innerHTML = "";
+      if (workDiffCache.length === 0) {
+        box.innerHTML = '<div class="res">(clean — no changes)</div>';
+        return;
+      }
+      workDiffCache.forEach((f, i) => {
+        const b = document.createElement("button");
+        b.className = "filerow" + (i === 0 ? " sel" : "");
+        const n = document.createElement("span");
+        n.textContent = f.file ?? f.path;
+        const st = document.createElement("span");
+        st.className = "st";
+        st.textContent = `${f.status ?? ""}${f.additions != null ? ` +${f.additions}/-${f.deletions ?? 0}` : ""}`.trim();
+        b.appendChild(n);
+        b.appendChild(st);
+        b.onclick = () => {
+          box.querySelectorAll(".filerow").forEach((x) => x.classList.remove("sel"));
+          b.classList.add("sel");
+          showWorkPatch(f);
+        };
+        box.appendChild(b);
+      });
+      showWorkPatch(workDiffCache[0]);
+    } catch (e) {
+      box.innerHTML = "";
+      const err = document.createElement("div");
+      err.className = "res";
+      err.textContent = `diff failed: ${e.message ?? e}`;
+      box.appendChild(err);
+    }
+  }
+  function showWorkPatch(f) {
+    const pre = $("work-patch");
+    pre.style.display = "block";
+    pre.textContent = f.patch ?? "(no patch text)";
+    pre.scrollTop = 0;
+  }
   $("work-undo").onclick = async () => {
     if (!selected) return;
     const r = await window.jarvis.sessionUndo(selected);
     addSys(`undone · redo branch ${r.redoID}`);
-    $("work-diff").textContent = "";
+    workDiffCache = [];
+    if ($("tab-diff").classList.contains("active")) loadWorkDiff();
   };
   $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); addSys("compacted"); } };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
