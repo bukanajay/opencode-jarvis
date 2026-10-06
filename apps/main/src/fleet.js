@@ -78,6 +78,30 @@ export async function forkSession(sessionID, before) {
   return { ok: true, sessionID, forkID: id };
 }
 
+export async function switchSessionAgent(sessionID, agent) {
+  const { client } = await ensureClient();
+  if (!agent || typeof agent !== "string") throw new Error("switch: agent required");
+  await client.session.switchAgent({ sessionID, agent });
+  return { ok: true, sessionID, agent };
+}
+
+export async function switchSessionModel(sessionID, providerID, id) {
+  const { client } = await ensureClient();
+  if (!providerID || !id) throw new Error("switch: providerID + id required");
+  await client.session.switchModel({ sessionID, model: { providerID, id } });
+  return { ok: true, sessionID, model: { providerID, id } };
+}
+
+export async function listAgents(location) {
+  const { client } = await ensureClient();
+  return client.agent.list(location ? { location: { directory: location } } : undefined);
+}
+
+export async function listModels() {
+  const { client } = await ensureClient();
+  return client.model.list();
+}
+
 export async function ensureFleetPump(onEvent) {
   if (onEvent) listeners.add(onEvent);
   if (pumpStarted) return;

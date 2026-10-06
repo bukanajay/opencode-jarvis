@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -191,6 +191,10 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("session.fork", async (_e, { sessionID, before } = {}) => forkSession(sessionID, before));
   ipcMain.handle("session.list", async () => ({ ok: true, sessions: await listSessions() }));
+  ipcMain.handle("session.switchAgent", async (_e, { sessionID, agent } = {}) => switchSessionAgent(sessionID, agent));
+  ipcMain.handle("session.switchModel", async (_e, { sessionID, providerID, id } = {}) => switchSessionModel(sessionID, providerID, id));
+  ipcMain.handle("agent.list", async () => ({ ok: true, agents: await listAgents(process.cwd()) }));
+  ipcMain.handle("model.list", async () => ({ ok: true, models: await listModels() }));
   ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");

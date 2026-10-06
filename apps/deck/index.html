@@ -73,6 +73,8 @@
     <div id="work-task"></div>
     <div class="tools" id="work-tools"></div>
     <div id="work-log"></div>
+    <p><label class="res">agent <select id="work-agent"></select></label>
+    <label class="res">model <select id="work-model"></select></label></p>
     <p><button class="ghost" id="work-stop">Stop this worker</button>
     <button class="ghost" id="work-rename">Rename</button>
     <button class="ghost" id="work-fork">Fork</button>
@@ -133,7 +135,37 @@
     $("work-task").textContent = (workers.find((w) => w.id === id)?.task ?? id);
     $("work-log").textContent = transcripts[id] ?? "";
     $("work-tools").textContent = (traces[id] ?? []).join("\n");
+    fillAgentModel();
   }
+  async function fillAgentModel() {
+    try {
+      const a = await window.jarvis.agentList();
+      const sel = $("work-agent");
+      sel.innerHTML = "";
+      ((a.agents?.data ?? []).map((x) => x.id)).forEach((id) => {
+        const o = document.createElement("option");
+        o.value = o.textContent = id;
+        sel.appendChild(o);
+      });
+    } catch {}
+    try {
+      const m = await window.jarvis.modelList();
+      const sel = $("work-model");
+      sel.innerHTML = "";
+      ((m.models?.models ?? m.models?.data ?? [])).forEach((x) => {
+        const o = document.createElement("option");
+        o.value = `${x.providerID}/${x.modelID ?? x.id}`;
+        o.textContent = `${x.providerID}/${x.id}`;
+        sel.appendChild(o);
+      });
+    } catch {}
+  }
+  $("work-agent").onchange = async (e) => { if (selected) await window.jarvis.sessionSwitchAgent(selected, e.target.value); };
+  $("work-model").onchange = async (e) => {
+    if (!selected) return;
+    const [providerID, ...rest] = e.target.value.split("/");
+    await window.jarvis.sessionSwitchModel(selected, providerID, rest.join("/"));
+  };
   window.jarvis?.onFleetState(({ snapshot }) => renderRing(snapshot));
   window.jarvis?.onWorkerStream(({ sessionID, delta }) => {
     transcripts[sessionID] = (transcripts[sessionID] ?? "") + delta;
