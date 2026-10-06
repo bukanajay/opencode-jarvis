@@ -7,6 +7,8 @@
     "dev": "electron ."
   },
   "dependencies": {
+    "@langchain/core": "^1.2.16",
+    "@langchain/langgraph": "^1.4.19",
     "@opencode/client": "2.0.24",
     "electron": "44.5.1"
   }

@@ -158,3 +158,21 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   `JARVIS_AUDIO_ENGINE=parakeet`. Verify on M5 with `npm run prove:audio` plus one
   live mic utterance. Open tuning items live in `helper.swift` (16 kHz resample,
   VAD-gated windows) — verify, don't trust.
+
+## Brain (core done 2026-10-06, voice + fleet-bootstrap pending per ROADMAP.md)
+
+`npm run prove:brain` -> `brain-ok` (memory, model, turn, persist).
+
+* `apps/main/src/brain/memory.js`: local long-term memory
+  (`~/.config/jarvis/memory.json`, `JARVIS_MEMORY_FILE` override). Facts with
+  keyword recall, heuristic extraction (`remember…`, `my X is Y`, `I prefer…`).
+  No embeddings yet — recorded as a later slice.
+* `apps/main/src/brain/brain.js`: LangGraph (`@langchain/langgraph`)
+  recall → think → persist. Think reasons through an OpenCode session, so Luna
+  stays the default and switching is validated against the OpenCode model list
+  (`JARVIS_BRAIN_MODEL` or `setBrainModel`), no new provider keys. Quota fallback
+  preserved. The deck prompt path now runs through the graph with a direct-turn
+  fallback if the graph throws.
+* Pending (tracked in ROADMAP.md, not forgotten): voice-mode toggle + `hey jarvis`
+  wake, fleet bootstrap (empty-fleet reply, provider/model/effort create flow),
+  default agent + auto mode.

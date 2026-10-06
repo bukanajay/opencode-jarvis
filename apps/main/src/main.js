@@ -6,6 +6,7 @@ import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
+import { brainRespond } from "./brain/brain.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
@@ -137,9 +138,12 @@ app.whenReady().then(async () => {
       broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
       return { ok: true, control: "app.command", entry };
     }
-    const r = await promptJarvis(text, (d) => {
+    const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }, files?.length ? { files } : {});
+    }).catch(async () => promptJarvis(text, (d) => {
+      // Brain fallback: direct session turn if the graph path fails.
+      win?.webContents.send("session.stream", { delta: d });
+    }, files?.length ? { files } : {}));
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
     return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0 };
   };
