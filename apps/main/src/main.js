@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
@@ -459,6 +459,12 @@ app.whenReady().then(async () => {
     audit: shellStore().audit,
     accents: ACCENTS,
   }));
+  ipcMain.handle("dialog.attach", async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ["openFile"], title: "Attach file to next message" });
+    if (r.canceled || !r.filePaths.length) return { ok: false };
+    const p = r.filePaths[0];
+    return { ok: true, uri: "file://" + p, name: p.split("/").pop() };
+  });
   ipcMain.handle("config.confirm", async (_e, { pendingID, confirmed } = {}) => {
     if (!pendingID || typeof confirmed !== "boolean") throw new Error("config.confirm: pendingID + confirmed required");
     const r = await confirmWidening((await ensureClient()).client, process.cwd(), pendingID, confirmed, widenHooks());

@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld("jarvis", {
   worktreeCreate: (args) => ipcRenderer.invoke("worktree.create", args),
   worktreeRemove: (projectID, directory) => ipcRenderer.invoke("worktree.remove", { projectID, directory }),
   sessionCompact: (sessionID) => ipcRenderer.invoke("session.compact", { sessionID }),
+  dialogAttach: () => ipcRenderer.invoke("dialog.attach"),
   bootstrapAnswer: (id, text) => ipcRenderer.invoke("bootstrap.answer", { id, text }),
   bootstrapCancel: (id) => ipcRenderer.invoke("bootstrap.cancel", { id }),
   onBootstrapAsk: (fn) => ipcRenderer.on("bootstrap.ask", (_e, payload) => fn(payload)),

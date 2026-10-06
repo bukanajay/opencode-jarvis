@@ -129,7 +129,10 @@
   button:active { transform: translateY(1px); }
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   button.danger { background: var(--danger); color: #160808; }
-  #mic.live { background: var(--accent); color: #0a0d05; box-shadow: 0 0 18px rgba(200, 240, 74, 0.45); animation: micbreathe 1.6s ease-in-out infinite; }
+  button.icon { padding: 10px 12px; display: inline-flex; align-items: center; justify-content: center; }
+  button.icon svg { width: 17px; height: 17px; }
+  button.icon.live { box-shadow: 0 0 18px rgba(200, 240, 74, 0.45); animation: micbreathe 1.6s ease-in-out infinite; }
+  #voice.on { background: var(--accent); color: #0a0d05; }
   @keyframes micbreathe { 0%, 100% { box-shadow: 0 0 10px rgba(200, 240, 74, 0.3); } 50% { box-shadow: 0 0 26px rgba(200, 240, 74, 0.6); } }
   #mic { min-width: 76px; }
   #caption { min-height: 24px; font-size: 14px; color: var(--ink); opacity: 0.9; }
@@ -181,14 +184,12 @@
       <div id="caption" aria-live="polite"></div>
       <form id="f">
         <input id="q" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" spellcheck="false" />
+        <button type="button" class="ghost icon" id="clip" title="Attach a file to the next message" aria-label="Attach file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
         <button type="submit">Send</button>
-        <button type="button" class="ghost" id="mic">Mic</button>
-        <button type="button" class="ghost" id="voice">Voice: off</button>
+        <button type="button" class="ghost icon" id="mic" title="Push to talk" aria-label="Microphone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg></button>
+        <button type="button" class="ghost icon" id="voice" title="Voice mode: keep listening for the wake word" aria-label="Voice mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-7 3 14 3-10 2 3h5"/></svg></button>
       </form>
-      <form id="fa" style="margin-top:8px;">
-        <input id="attach" placeholder="attach path (optional)" />
-        <button class="ghost" type="submit">Attach</button>
-      </form>
+      <div id="staged" class="res" style="display:none;margin-top:6px;"></div>
       <datalist id="cmds"></datalist>
     </section>
   </div>
@@ -608,7 +609,10 @@
   let defaultAgent = "build";
   function paintVoice(s) {
     const b = $("voice");
-    if (b) b.textContent = `Voice: ${s.voiceMode === "on" ? "on" : "off"}`;
+    if (!b) return;
+    const on = s.voiceMode === "on";
+    b.classList.toggle("on", on);
+    b.title = `Voice mode ${on ? "on — listening for the wake word" : "off"}`;
   }
   window.jarvis?.onSettings(({ entry, settings }) => {
     if (entry.what.startsWith("set.voiceMode") || entry.what.startsWith("set.autoMode") || entry.what.startsWith("set.defaultAgent")) {
@@ -617,7 +621,7 @@
     }
   });
   $("voice").onclick = async () => {
-    const cur = $("voice").textContent.includes("on");
+    const cur = $("voice").classList.contains("on");
     await window.jarvis.appCommand("set.voiceMode", { value: cur ? "off" : "on" });
   };
 
@@ -806,9 +810,8 @@
     log.textContent += "\n> " + text + "\n";
     const m = text.match(/^launch worker:\s*(.+)/i);
     if (m) { spawnNote(await window.jarvis.fleetSpawn(m[1])); return; }
-    const files = [];
-    const ap = $("attach").value.trim();
-    if (ap) files.push({ uri: ap.startsWith("file://") ? ap : "file://" + ap, name: ap.split("/").pop() });
+    const files = staged ? [{ uri: staged.uri, name: staged.name }] : [];
+    if (staged) { log.textContent += `[attached ${staged.name}]\n`; staged = null; paintStaged(); }
     const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files })
       .catch((e) => ({ ok: false, reason: String(e.message ?? e) }));
     if (!r?.ok) { log.textContent += `\n[fault] ${r?.reason ?? "send failed"}\n`; sndFault(); return; }
@@ -817,7 +820,24 @@
     if (r?.control === "config.apply") log.textContent += `\n[config] ${r.note ?? r.name}\n`;
     if (r?.control === "config.stage") log.textContent += `\n[config] staged — confirm on the card\n`;
   });
-  $("fa").addEventListener("submit", (e) => { e.preventDefault(); log.textContent += "\n[attach staged — send a message to include it]\n"; });
+  // One clip stages one file for the next message; sent once, then cleared.
+  let staged = null;
+  function paintStaged() {
+    const el = $("staged");
+    if (!staged) { el.style.display = "none"; el.textContent = ""; return; }
+    el.style.display = "block";
+    el.textContent = "";
+    el.append(`Attached: ${staged.name} — goes with the next message (`);
+    const x = document.createElement("a");
+    x.href = "#";
+    x.textContent = "remove";
+    x.onclick = (e) => { e.preventDefault(); staged = null; paintStaged(); };
+    el.append(x, ")");
+  }
+  $("clip").onclick = async () => {
+    const r = await window.jarvis.dialogAttach();
+    if (r?.ok) { staged = { uri: r.uri, name: r.name }; paintStaged(); }
+  };
   // Suggestions only on leading / or @. Plain words never trigger the catalog
   // ("hi" contains "hi" inside "arcHItect" under native substring matching).
   const cmdCatalog = { commands: [], skills: [] };
