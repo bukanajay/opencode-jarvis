@@ -19,6 +19,10 @@
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  html { scrollbar-color: var(--line) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
   body {
     background: radial-gradient(1200px 700px at 50% -10%, #0b1410 0%, var(--bg) 55%) fixed, var(--bg);
     color: var(--ink);
@@ -81,8 +85,19 @@
     font-size: 13.5px;
   }
   #log .sys { color: var(--dim); font-family: var(--cap); font-size: 11px; }
-  #work { display: none; }
+  /* Work view is a popup over the deck, opened by clicking a fleet node. */
+  #work { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(3, 5, 6, 0.7); padding: 6vh 6vw; border: 0; border-radius: 0; }
   #work.show { display: block; }
+  #work .sheet {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 12px;
+    max-width: 720px; margin: 0 auto; padding: 16px 18px;
+    max-height: 88vh; overflow: auto;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+    animation: cardin 180ms ease;
+  }
+  #work .bar { display: flex; align-items: center; justify-content: space-between; }
+  #work .bar h2 { margin: 0; }
   #work-task { font-weight: 600; margin-bottom: 6px; }
   #work-log { white-space: pre-wrap; max-height: 220px; overflow: auto; }
   .tools { font-family: var(--cap); font-size: 11.5px; color: var(--dim); white-space: pre-wrap; }
@@ -160,9 +175,21 @@
         <button class="ghost" id="stop">Stop latest</button>
       </div>
     </section>
-    <section>
+    <section class="chat">
       <h2>Transcript</h2>
       <div id="log" aria-live="polite"></div>
+      <div id="caption" aria-live="polite"></div>
+      <form id="f">
+        <input id="q" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" spellcheck="false" />
+        <button type="submit">Send</button>
+        <button type="button" class="ghost" id="mic">Mic</button>
+        <button type="button" class="ghost" id="voice">Voice: off</button>
+      </form>
+      <form id="fa" style="margin-top:8px;">
+        <input id="attach" placeholder="attach path (optional)" />
+        <button class="ghost" type="submit">Attach</button>
+      </form>
+      <datalist id="cmds"></datalist>
     </section>
   </div>
 
@@ -171,8 +198,9 @@
   <div id="frm-slot"></div>
   <div id="boot-slot"></div>
 
-  <section id="work">
-    <h2>Work view</h2>
+  <section id="work" role="dialog" aria-modal="true" aria-label="Work view">
+  <div class="sheet">
+    <div class="bar"><h2>Work view</h2><button class="ghost" id="work-x" aria-label="Close">✕</button></div>
     <div id="work-task"></div>
     <div class="tools" id="work-tools"></div>
     <div id="work-log"></div>
@@ -184,24 +212,9 @@
     <button class="ghost" id="work-diff">Diff</button>
     <button class="ghost" id="work-undo">Undo last</button>
     <button class="ghost" id="work-compact">Compact</button>
-    <button class="ghost" id="work-back">Back</button></p>
+    <button class="ghost" id="work-back">Close</button></p>
     <div class="tools" id="work-diff"></div>
-  </section>
-
-  <section>
-    <h2>Composer</h2>
-    <div id="caption" aria-live="polite"></div>
-    <form id="f">
-      <input id="q" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" spellcheck="false" />
-      <button type="submit">Send</button>
-      <button type="button" class="ghost" id="mic">Mic</button>
-      <button type="button" class="ghost" id="voice">Voice: off</button>
-    </form>
-    <form id="fa" style="margin-top:8px;">
-      <input id="attach" placeholder="attach path (optional)" />
-      <button class="ghost" type="submit">Attach</button>
-    </form>
-    <datalist id="cmds"></datalist>
+  </div>
   </section>
 
   <details id="yard-details">
@@ -782,6 +795,9 @@
   };
   $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); log.textContent += "\n[compacted]\n"; } };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
+  $("work-x").onclick = () => { selected = null; $("work").classList.remove("show"); };
+  $("work").addEventListener("click", (e) => { if (e.target === $("work")) { selected = null; $("work").classList.remove("show"); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { selected = null; $("work").classList.remove("show"); } });
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("q").value.trim();
