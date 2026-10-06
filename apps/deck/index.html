@@ -258,19 +258,22 @@
       <div class="res" id="wt-out"></div>
     </div>
   </details>
-  <p class="row"><button class="ghost" id="yard-toggle">Open yard</button></p>
 
-  <section id="mcp">
-    <h2>MCP</h2>
+  <details id="mcp">
+    <summary>MCP <span class="res" id="mcp-sum"></span></summary>
+    <div class="body">
     <div class="res" id="mcp-list"></div>
     <p class="row"><button class="ghost" id="mcp-refresh">Refresh</button></p>
-  </section>
+    </div>
+  </details>
 
-  <section>
-    <h2>Settings — audit log</h2>
+  <details id="audit-details">
+    <summary>Settings — audit log</summary>
+    <div class="body">
     <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;min-height:44px;"></div>
     <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
-  </section>
+    </div>
+  </details>
 
   <!-- compat anchors kept for wiring -->
   <section id="perm" style="display:none" aria-hidden="true">
@@ -896,11 +899,6 @@
     if (r?.utterance) showWorking();
   };
   let termID = null, termTimer = null;
-  $("yard-toggle").onclick = () => {
-    const y = $("yard-details");
-    y.open = !y.open;
-    $("yard-toggle").textContent = y.open ? "Close yard" : "Open yard";
-  };
   async function termPoll() {
     if (!termID) return;
     const o = await window.jarvis.termOutput(termID);
@@ -1016,10 +1014,13 @@
   async function mcpRefresh() {
     try {
       const r = await window.jarvis.mcpList();
-      $("mcp-list").textContent = (r.servers ?? []).map((s) => `${s.name}: ${s.status?.status ?? "unknown"}`).join("\n") || "(none)";
+      const rows = (r.servers ?? []).map((s) => `${s.name}: ${s.status?.status ?? "unknown"}`);
+      $("mcp-list").textContent = rows.join("\n") || "(none)";
+      $("mcp-sum").textContent = rows.length ? `— ${rows.length} server${rows.length === 1 ? "" : "s"}` : "";
     } catch (e) { $("mcp-list").textContent = String(e.message ?? e); }
   }
   $("mcp-refresh").onclick = mcpRefresh;
+  $("mcp").addEventListener("toggle", () => { if ($("mcp").open) mcpRefresh(); });
 
   sizeCanvas();
   layoutTargets();
