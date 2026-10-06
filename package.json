@@ -11,6 +11,7 @@
   "scripts": {
     "prove:server": "node scripts/prove-server.mjs",
     "prove:voice": "node scripts/prove-voice.mjs",
+    "prove:fleet": "node scripts/prove-fleet.mjs",
     "build:audio": "mkdir -p apps/audio-speech-analyzer/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer",
     "dev:main": "npm --workspace apps/main run dev",
     "dev:deck": "npm --workspace apps/deck run dev"

@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
+import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance } from "./fleet.js";
+
+
+async function answerPending(decision) {
+  const [requestID] = [...pendingPermissions.keys()];
+  const r = await replyPermission(requestID, decision);
+  return { requestID, decision, r };
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
@@ -25,16 +33,38 @@ async function createWindow() {
 app.whenReady().then(async () => {
   await ensureClient();
   await ensureJarvisSession(process.cwd());
-  ipcMain.handle("utterance.commit", async (_e, utterance) => {
-    if (!utterance?.text || typeof utterance.text !== "string") {
-      throw new Error("utterance.text required");
+  const broadcast = (msg) => win?.webContents.send(msg.kind, msg);
+  await ensureFleetPump((ev) => {
+    if (ev.kind === "permission.waiting") broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
+    else if (ev.kind === "permission.resolved") broadcast({ kind: "permission.resolved", ...ev });
+    else if (ev.kind === "worker.tool") broadcast({ kind: "session.tool", ...ev });
+    else if (ev.kind === "worker.stream") broadcast({ kind: "worker.stream", ...ev });
+    else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
+  });
+  const commitText = async (text) => {
+    const routed = routeUtterance(text);
+    if (routed.route === "permission") {
+      const r = await answerPending(routed.decision);
+      return { ok: true, control: "permission", ...r };
     }
-    // Typed and speech utterances converge here. No separate model path.
-    const r = await promptJarvis(utterance.text, (d) => {
+    if (routed.route === "stop-worker") {
+      const w = latestActiveWorker();
+      if (!w) return { ok: false, control: "stop-worker", reason: "no active worker" };
+      await stopWorker(w.sessionID);
+      broadcast({ kind: "fleet.state", snapshot: snapshot() });
+      return { ok: true, control: "stop-worker", sessionID: w.sessionID };
+    }
+    const r = await promptJarvis(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
     });
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
     return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status };
+  };
+  ipcMain.handle("utterance.commit", async (_e, utterance) => {
+    if (!utterance?.text || typeof utterance.text !== "string") {
+      throw new Error("utterance.text required");
+    }
+    return commitText(utterance.text);
   });
   ipcMain.handle("audio.start", async (_e, { simulate } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };
@@ -49,12 +79,9 @@ app.whenReady().then(async () => {
       });
       const utterance = toUtterance(fin);
       win?.webContents.send("caption.final", { id: utterance.id, text: utterance.text });
-      // Same prompt path as text. Commit on end of utterance.
-      const r = await promptJarvis(utterance.text, (d) => {
-        win?.webContents.send("session.stream", { delta: d });
-      });
-      win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
-      return { ok: true, utterance, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status };
+      // Same routed path as typed text. Spoken allow/deny/stop are controls.
+      const r = await commitText(utterance.text);
+      return { ok: true, utterance, ...r };
     } catch (err) {
       win?.webContents.send("audio.error", { message: String(err.message ?? err) });
       return { ok: false, reason: String(err.message ?? err) };
@@ -63,6 +90,33 @@ app.whenReady().then(async () => {
   ipcMain.handle("audio.stop", async () => {
     stopListening();
     return { ok: true };
+  });
+  ipcMain.handle("fleet.spawn", async (_e, { task, agent } = {}) => {
+    if (!task || typeof task !== "string") throw new Error("fleet.spawn: task required");
+    const r = await spawnWorker(task, { agent });
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return { ok: true, ...r };
+  });
+  ipcMain.handle("fleet.list", async () => ({ ok: true, workers: snapshot() }));
+  ipcMain.handle("fleet.stop", async (_e, { sessionID } = {}) => {
+    const id = sessionID ?? latestActiveWorker()?.sessionID;
+    if (!id) return { ok: false, reason: "no active worker" };
+    await stopWorker(id);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return { ok: true, sessionID: id };
+  });
+  ipcMain.handle("fleet.delete", async (_e, { sessionID } = {}) => {
+    if (!sessionID) throw new Error("fleet.delete: sessionID required");
+    await deleteWorker(sessionID);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return { ok: true };
+  });
+  ipcMain.handle("permission.respond", async (_e, { requestID, decision } = {}) => {
+    if (!requestID || (decision !== "allow" && decision !== "deny")) {
+      throw new Error("permission.respond: requestID + allow|deny required");
+    }
+    await replyPermission(requestID, decision);
+    return { ok: true, requestID, decision };
   });
   await createWindow();
 });

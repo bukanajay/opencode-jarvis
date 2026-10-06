@@ -50,3 +50,24 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   `promptJarvis` call. Proven: `shape-ok` + live `voice-ok` reply.
 * Deck: Mic button, caption line in composer replaces itself per partial
   (`apps/deck/index.html`), never appends. Live region is text, not canvas.
+
+## Step 3 Fleet (done 2026-10-06)
+
+`WORKER_MODEL=opencode/fledge-alpha-free npm run prove:fleet` -> `fleet-ok`.
+
+* `apps/main/src/fleet.js`: child sessions (`parentID` = Jarvis session), one shared
+  event pump with listener set, per-worker `idle|working|permission|done|failed|stopped`,
+  transcript + tool trace. Tool state from `session.tool.*`; done on
+  `session.execution.succeeded/failed`.
+* Permission gate is a blocking card, not a toast. `permission.asked` breaks the
+  ring into the center + permission sound; `Allow once`/`Deny` by hand, or spoken
+  `allow`/`deny` — `routeUtterance` sends controls to `permission.reply`
+  (`once`/`reject`, never silent `always`) and everything else to Jarvis.
+  Proven live: `/tmp` write asked `external_directory`, deny won, file absent.
+  Idle external gates auto-resolve fast, so replies go out inside the event
+  handler; the deck hides the card on `permission.resolved`.
+* Stop = `session.interrupt`, delete = `session.remove`. Proven: worker stopped
+  mid-`sleep 30`, deleted, gone from `session.list`.
+* Deck: DOM ring (center Jarvis, workers on ring), work view per worker
+  (transcript + tool trace), three WebAudio sounds (permission/done/fault).
+  `WORKER_MODEL` env selects the worker model; Luna stays the Jarvis default.
