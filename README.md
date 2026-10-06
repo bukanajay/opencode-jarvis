@@ -109,3 +109,28 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * Model note: free-tier `opencode/*` models reject direct subagent sessions
   (403 `FreeTierError`), so reviewer dispatches ride `openrouter/apodex`
   (`REVIEWER_MODEL` override) until Luna quota returns. Luna stays the Jarvis default.
+
+## Step 6 Parity (done 2026-10-06, surface by surface, same server as desktop)
+
+* Sessions (`prove:sessions`): rename reflected in `session.get`, fork returns a live
+  id, delete removes both. Work-view Rename/Fork buttons.
+* Forms (`prove:forms`): the server emits no creation event, so the gate detects via
+  the question-tool call + re-list. Blocking card by hand, spoken option text answers
+  single-field forms (`matchFormAnswer` pure + live). Out: nothing — session sharing
+  and TUI themes/keybinds stay out per spec (unsupported / `cli.json` only).
+* Agent/model switch (`prove:switch`): next `step.started` runs the new agent+model.
+  Luna asserted as Jarvis default. Work-view selects.
+* Commands/skills/attachments (`prove:cmdskill`): 29 commands, 71 skills cataloged;
+  live `/review` turn; attached file quoted back. Composer datalist + attach path;
+  `/name` and `@skill` route off the model path.
+* Diff/undo/redo (`prove:diff`): rollback boundary is the **user** message (assistant
+  messages stage empty). Undo restores files + cleans diff; redo = pre-undo fork.
+  Work-view Diff/Undo buttons.
+* Terminal/PTY (`prove:terminal`): shell run/poll/kill; PTY open/resize/close.
+  Yard section opened on purpose. PTY live frames (websocket ticket) are follow-up.
+* MCP (`prove:mcp`): atlassian connected; GitLab OAuth attempt issued a real authorize
+  URL, polled pending, cancelled. Deck status section.
+* Worktrees/project/compact (`prove:workproj`): worktree field mapping
+  (`from`=source dir, `branch`=base, `name`=new, `directory`=root) create-list-remove
+  with branch cleanup; external-directory worker; session answers after compact.
+  Yard project spawn + worktree list, work-view Compact.
