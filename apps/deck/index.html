@@ -244,6 +244,7 @@
   <div id="cfg-slot"></div>
   <div id="frm-slot"></div>
   <div id="boot-slot"></div>
+  <div id="ask-slot"></div>
 
   <section id="work" role="dialog" aria-modal="true" aria-label="Work view">
   <div class="sheet">
@@ -546,6 +547,46 @@
   }
 
   // blocking cards mount here (perm/cfg/frm templates stay as source)
+  // Text input card. window.prompt does not exist in Electron (it silently
+  // returns nothing), so anything needing free text uses this instead.
+  function askText({ title, initial = "", placeholder = "", okLabel = "OK" }) {
+    return new Promise((resolve) => {
+      const host = $("ask-slot");
+      host.innerHTML = "";
+      const el = document.createElement("section");
+      el.className = "card amber";
+      const h = document.createElement("h2");
+      h.textContent = title;
+      const input = document.createElement("input");
+      input.value = initial;
+      input.placeholder = placeholder;
+      input.style.width = "100%";
+      input.style.margin = "8px 0";
+      const row = document.createElement("p");
+      row.className = "row";
+      const ok = document.createElement("button");
+      ok.textContent = okLabel;
+      const no = document.createElement("button");
+      no.textContent = "Cancel";
+      no.className = "ghost";
+      const done = (v) => { host.innerHTML = ""; resolve(v); };
+      ok.onclick = () => done(input.value.trim() || null);
+      no.onclick = () => done(null);
+      input.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") done(input.value.trim() || null);
+        if (e.key === "Escape") done(null);
+      };
+      row.appendChild(ok);
+      row.appendChild(no);
+      el.appendChild(h);
+      el.appendChild(input);
+      el.appendChild(row);
+      host.appendChild(el);
+      input.focus();
+      input.select();
+    });
+  }
   function mountCard(kind, { title, body, rule, buttons, amber }) {
     unmountCard(kind);
     const host = $(kind + "-slot");
@@ -873,7 +914,7 @@
   $("allow").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "allow"); unmountCard("perm"); $("perm").classList.remove("show"); };
   $("deny").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "deny"); unmountCard("perm"); $("perm").classList.remove("show"); };
   $("spawn").onclick = async () => {
-    const task = prompt("Worker task:", "Run `ls` and report the first 3 entries. Do not edit files.");
+    const task = await askText({ title: "Launch worker", initial: "Run `ls` and report the first 3 entries. Do not edit files.", okLabel: "Launch" });
     if (!task) return;
     try {
       const r = await window.jarvis.fleetSpawn(task);
@@ -902,7 +943,7 @@
   };
   $("work-rename").onclick = async () => {
     if (!selected) return;
-    const title = prompt("Rename session:", workers.find((w) => w.id === selected)?.task ?? "");
+    const title = await askText({ title: "Rename session", initial: workers.find((w) => w.id === selected)?.task ?? "", okLabel: "Rename" });
     if (!title) return;
     await window.jarvis.sessionRename(selected, title);
     window.jarvis.fleetList().then((r) => renderRing(r.workers));
