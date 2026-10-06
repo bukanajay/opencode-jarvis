@@ -16,15 +16,19 @@ export function memoryPath() {
 export function loadMemory(file = memoryPath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-    return { file, facts: Array.isArray(raw.facts) ? raw.facts : [], preferences: raw.preferences ?? {} };
+    const facts = Array.isArray(raw.facts) ? raw.facts : [];
+    const ids = new Set(facts.map((f) => f.id));
+    const vectors = raw.vectors && typeof raw.vectors === "object" ? raw.vectors : {};
+    for (const k of Object.keys(vectors)) if (!ids.has(k)) delete vectors[k];
+    return { file, facts, preferences: raw.preferences ?? {}, vectors };
   } catch {
-    return { file, facts: [], preferences: {} };
+    return { file, facts: [], preferences: {}, vectors: {} };
   }
 }
 
 function save(mem) {
   fs.mkdirSync(path.dirname(mem.file), { recursive: true });
-  fs.writeFileSync(mem.file, JSON.stringify({ facts: mem.facts, preferences: mem.preferences }, null, 2));
+  fs.writeFileSync(mem.file, JSON.stringify({ facts: mem.facts, preferences: mem.preferences, vectors: mem.vectors ?? {} }, null, 2));
 }
 
 function words(s) {
@@ -45,11 +49,70 @@ export function remember(mem, text, tags = []) {
 export function forget(mem, id) {
   const n = mem.facts.length;
   mem.facts = mem.facts.filter((f) => f.id !== id);
+  if (mem.vectors) delete mem.vectors[id];
   if (mem.facts.length !== n) save(mem);
   return n !== mem.facts.length;
 }
 
 export function recall(mem, query, limit = 5) {
+  return recallSemantic(mem, query, limit);
+}
+
+// Local embedding provider (Transformers.js MiniLM, ONNX CPU, no keys, no
+// network after first model download). Cosine rank; anything below the floor
+// or any provider failure falls back to BM25. JARVIS_EMBED_OFF=1 forces BM25.
+const EMBED_FLOOR = 0.28;
+let embedder = null;
+
+async function getEmbedder() {
+  if (process.env.JARVIS_EMBED_OFF === "1") throw new Error("embeddings off");
+  if (!embedder) {
+    const { pipeline } = await import("@xenova/transformers");
+    embedder = await pipeline("feature-extraction", process.env.JARVIS_EMBED_MODEL ?? "Xenova/all-MiniLM-L6-v2");
+  }
+  return embedder;
+}
+
+export function warmEmbeddings() {
+  getEmbedder().catch(() => {});
+}
+
+async function embedRows(texts) {
+  const ex = await getEmbedder();
+  const out = await ex(texts, { pooling: "mean", normalize: true });
+  const rows = out.tolist();
+  return Array.isArray(rows[0]) ? rows : [rows];
+}
+
+async function ensureVectors(mem) {
+  mem.vectors ??= {};
+  const missing = mem.facts.filter((f) => !Array.isArray(mem.vectors[f.id]));
+  if (missing.length === 0) return;
+  const rows = await embedRows(missing.map((f) => f.text));
+  missing.forEach((f, i) => { mem.vectors[f.id] = rows[i]; });
+  save(mem);
+}
+
+const dot = (a, b) => a.reduce((n, x, i) => n + x * (b[i] ?? 0), 0);
+
+export async function recallSemantic(mem, query, limit = 5) {
+  try {
+    if (!String(query ?? "").trim() || mem.facts.length === 0) return [];
+    await ensureVectors(mem);
+    const [qvec] = await embedRows([String(query)]);
+    const ranked = mem.facts
+      .map((f) => ({ fact: f, score: dot(qvec, mem.vectors[f.id] ?? []) }))
+      .sort((a, b) => b.score - a.score || b.fact.at - a.fact.at);
+    if (ranked.length === 0 || ranked[0].score < EMBED_FLOOR) return [];
+    return ranked.slice(0, limit).map((r) => r.fact);
+  } catch {
+    return bm25Recall(mem, query, limit);
+  }
+}
+
+// BM25-lite: idf-weighted overlap with length norm. Sync fallback when the
+// local embedding provider is off or unavailable. No deps, no embeddings.
+export function bm25Recall(mem, query, limit = 5) {
   const q = words(query);
   if (q.length === 0) return [];
   const docs = mem.facts.map((f) => words(f.text));

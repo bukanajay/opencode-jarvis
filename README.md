@@ -37,7 +37,8 @@ npm --workspace apps/main run dev   # Electron deck, same Service.ensure() path
 
 See `packages/proto/types.ts`, `packages/proto/allowlist.json`, `plugins/jarvis/rpc.ts`.
 
-Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
+Steps 1–7, including Voice, are complete; remaining implementation and
+hardware-validation work is listed in `ROADMAP.md`.
 
 ## Step 2 Voice (done 2026-10-06)
 
@@ -129,8 +130,14 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * Diff/undo/redo (`prove:diff`): rollback boundary is the **user** message (assistant
   messages stage empty). Undo restores files + cleans diff; redo = pre-undo fork.
   Work-view Diff/Undo buttons.
-* Terminal/PTY (`prove:terminal`): shell run/poll/kill; PTY open/resize/close.
-  Yard section opened on purpose. PTY live frames (websocket ticket) are follow-up.
+* Terminal/PTY (`prove:terminal` + `prove:pty-live`): shell run/poll/kill
+  (one-shot Yard path); PTY open/resize/close plus live frames over a
+  websocket ticket minted in main (`x-opencode-ticket: 1` ->
+  `GET /api/pty/:id/connect?ticket=`). Outbound frames are raw UTF-8 chunks
+  plus one `0x00`+`{"cursor"}` meta frame; inbound text frames are stdin.
+  Yard has both paths labeled: one-shot shell vs live PTY (stream, write,
+  reconnect with cursor resume, resize, close). Tickets are single-use, so
+  every (re)connect mints a fresh one.
 * MCP (`prove:mcp`): atlassian connected; GitLab OAuth attempt issued a real authorize
   URL, polled pending, cancelled. Deck status section.
 * Worktrees/project/compact (`prove:workproj`): worktree field mapping
@@ -159,7 +166,7 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   live mic utterance. Open tuning items live in `helper.swift` (16 kHz resample,
   VAD-gated windows) — verify, don't trust.
 
-## Brain (core done 2026-10-06, voice + fleet-bootstrap pending per ROADMAP.md)
+## Brain (core done 2026-10-06; voice + fleet-bootstrap + auto done same day, see below)
 
 `npm run prove:brain` -> `brain-ok` (memory, model, turn, persist).
 
@@ -173,9 +180,9 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   (`JARVIS_BRAIN_MODEL` or `setBrainModel`), no new provider keys. Quota fallback
   preserved. The deck prompt path now runs through the graph with a direct-turn
   fallback if the graph throws.
-* Pending (tracked in ROADMAP.md, not forgotten): voice-mode toggle + `hey jarvis`
-  wake, fleet bootstrap (empty-fleet reply, provider/model/effort create flow),
-  default agent + auto mode.
+* Pending (tracked in ROADMAP.md, not forgotten): embeddings/LLM fact
+  extraction for memory (heuristic keywords only today), narrower default
+  permissions for created agents, M5 live-mic verification.
 
 ## Voice, bootstrap, auto (done 2026-10-06, three parallel slices + integration)
 
@@ -199,6 +206,10 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * Kept decisions: new-agent permissions default to ask (the gate arbitrates each
   edit/shell call instead of silent allow); `@build` stays valid explicit;
   bootstrap `yes` loses ties to permission/config confirms by existing route order.
-* Recall is BM25-lite (idf + length norm, no deps). Real embeddings still need a
-  provider and stay a later slice. Voice loop backs off (1.5s → 30s cap) on
-  repeated mic failures instead of hot-looping.
+* Recall is local-embedding first (Transformers.js MiniLM, ONNX CPU, no keys;
+  model downloads once then runs offline), BM25-lite fallback
+  (`JARVIS_EMBED_OFF=1` forces it). Paraphrase with zero shared keywords recalls
+  (`boat name` → `ship called Aurora`, 0.52 vs 0.01 unrelated); unrelated stays
+  empty via a 0.28 floor. Vectors persist beside facts in `memory.json`.
+  Embedder warms in the background at boot. Voice loop backs off (1.5s → 30s
+  cap) on repeated mic failures instead of hot-looping.

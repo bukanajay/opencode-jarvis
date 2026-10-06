@@ -8,7 +8,7 @@ import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
 import { brainRespond } from "./brain/brain.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
-import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose } from "./terminal.js";
+import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
 import { isVoiceMode, nextVoiceAction } from "./voice.js";
 import { ensureFleetOrAsk, startCreate, answerCreate, pendingBootstraps } from "./bootstrap.js";
@@ -386,6 +386,17 @@ app.whenReady().then(async () => {
   ipcMain.handle("term.output", async (_e, { id, cursor } = {}) => termOutput(id, process.cwd(), cursor));
   ipcMain.handle("term.kill", async (_e, { id } = {}) => termKill(id, process.cwd()));
   ipcMain.handle("pty.open", async () => ptyOpen(process.cwd()));
+  ipcMain.handle("pty.attach", async (_e, { ptyID, cursor } = {}) => {
+    const push = (kind) => (payload) => win?.webContents.send(kind, payload);
+    return ptyAttach(ptyID, process.cwd(), {
+      cursor,
+      onChunk: push("pty.data"),
+      onMeta: push("pty.meta"),
+      onClose: push("pty.exit"),
+    });
+  });
+  ipcMain.handle("pty.write", async (_e, { ptyID, data } = {}) => ptyWrite(ptyID, data));
+  ipcMain.handle("pty.detach", async (_e, { ptyID } = {}) => ptyDetach(ptyID));
   ipcMain.handle("pty.resize", async (_e, { ptyID, rows, cols } = {}) => ptyResize(ptyID, process.cwd(), rows, cols));
   ipcMain.handle("pty.close", async (_e, { ptyID } = {}) => ptyClose(ptyID, process.cwd()));
   ipcMain.handle("mcp.list", async () => {
@@ -451,8 +462,10 @@ app.whenReady().then(async () => {
   });
   await createWindow();
   if (isVoiceMode(shellStore())) voiceLoop(commitText, win);
+  import("./brain/memory.js").then((m) => m.warmEmbeddings()).catch(() => {});
 });
 
 app.on("window-all-closed", () => {
+  ptyDetachAll();
   if (process.platform !== "darwin") app.quit();
 });

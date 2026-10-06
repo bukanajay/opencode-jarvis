@@ -37,8 +37,26 @@ contextBridge.exposeInMainWorld("jarvis", {
   termOutput: (id, cursor) => ipcRenderer.invoke("term.output", { id, cursor }),
   termKill: (id) => ipcRenderer.invoke("term.kill", { id }),
   ptyOpen: () => ipcRenderer.invoke("pty.open"),
+  ptyAttach: (ptyID, cursor) => ipcRenderer.invoke("pty.attach", { ptyID, cursor }),
+  ptyWrite: (ptyID, data) => ipcRenderer.invoke("pty.write", { ptyID, data }),
+  ptyDetach: (ptyID) => ipcRenderer.invoke("pty.detach", { ptyID }),
   ptyResize: (ptyID, rows, cols) => ipcRenderer.invoke("pty.resize", { ptyID, rows, cols }),
   ptyClose: (ptyID) => ipcRenderer.invoke("pty.close", { ptyID }),
+  onPtyData: (fn) => {
+    const h = (_e, payload) => fn(payload);
+    ipcRenderer.on("pty.data", h);
+    return () => ipcRenderer.removeListener("pty.data", h);
+  },
+  onPtyMeta: (fn) => {
+    const h = (_e, payload) => fn(payload);
+    ipcRenderer.on("pty.meta", h);
+    return () => ipcRenderer.removeListener("pty.meta", h);
+  },
+  onPtyExit: (fn) => {
+    const h = (_e, payload) => fn(payload);
+    ipcRenderer.on("pty.exit", h);
+    return () => ipcRenderer.removeListener("pty.exit", h);
+  },
   mcpList: () => ipcRenderer.invoke("mcp.list"),
   integrationList: () => ipcRenderer.invoke("integration.list"),
   oauthConnect: (integrationID, methodID) => ipcRenderer.invoke("oauth.connect", { integrationID, methodID }),

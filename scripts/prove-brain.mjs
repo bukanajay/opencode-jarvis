@@ -15,10 +15,14 @@ const { brainRespond, getBrainModel, setBrainModel } = await import("../apps/mai
 let mem = loadMemory();
 remember(mem, "user prefers amber accent", ["test"]);
 remember(mem, "reviewer agent exists", ["test"]);
+remember(mem, "ship is called Aurora", ["test"]);
 mem = loadMemory();
-const hits = recall(mem, "which accent does the user prefer?");
+const hits = await recall(mem, "which accent does the user prefer?");
 if (!hits.some((f) => f.text.includes("amber"))) throw new Error("recall missed");
-if (recall(mem, "quantum banana extradition").length !== 0) throw new Error("recall leak");
+if ((await recall(mem, "quantum banana extradition")).length !== 0) throw new Error("recall leak");
+// Semantic reach: paraphrase with no shared keywords still recalls.
+const para = await recall(mem, "what is the name of my boat?");
+if (!para.some((f) => /aurora/i.test(f.text))) throw new Error("semantic miss");
 const ext = extractCandidates("remember my editor is vim");
 if (!ext.some((s) => s.includes("vim"))) throw new Error("extract missed");
 console.log("memory-ok: write, recall, extract");

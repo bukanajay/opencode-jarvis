@@ -1,4 +1,10 @@
-# Voice-mode integration proposal (main.js + deck)
+# Voice-mode integration (implemented 2026-10-06 — proposal kept for history)
+
+Wired in `apps/main/src/main.js` (`voiceLoop` beside `commitText`,
+`isListening` guard both directions) and `apps/main/src/voice.js`; deck
+Voice toggle next to Mic in `apps/deck/index.html`. No new IPC — wake-task
+text reuses `commitText`. Proven by `scripts/prove-voice-mode.mjs`.
+Original proposal follows.
 
 ## Loop (new `startVoiceLoop` in main.js, beside `commitText`)
 

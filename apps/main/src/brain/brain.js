@@ -99,7 +99,7 @@ function buildGraph(handlers) {
   const g = new StateGraph(BrainState);
   g.addNode("recall", async (state) => {
     const mem = loadMemory();
-    return { memories: recall(mem, state.text).map((f) => f.text) };
+    return { memories: (await recall(mem, state.text)).map((f) => f.text) };
   });
   g.addNode("think", async (state) => {
     const memLine = state.memories.length > 0

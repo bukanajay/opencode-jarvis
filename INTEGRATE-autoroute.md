@@ -1,4 +1,10 @@
-# Integrate autoroute
+# Integrate autoroute (implemented 2026-10-06 — proposal kept for history)
+
+Wired at spawn time in `apps/main/src/main.js` (`parseExplicitAgent` /
+`resolveAgent` / `getFleetRegistry`, `@build` stays valid explicit by
+decision) and `apps/main/src/autoroute.js`; deck agent select preselects
+`settings.defaultAgent`. Proven by `scripts/prove-autoroute.mjs`.
+Original proposal follows.
 
 `apps/main/src/autoroute.js` is standalone: pure parse/pick/resolve +
 `getFleetRegistry` (agent.list minus BUILTINS). Wire it at spawn time.

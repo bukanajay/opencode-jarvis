@@ -207,12 +207,28 @@
   <details id="yard-details">
     <summary>Yard — files, git, terminal</summary>
     <div class="body" id="yard">
+      <div class="res">One-shot shell (run → poll output → kill)</div>
       <pre class="term" id="term-out"></pre>
       <form id="term-f">
         <input id="term-cmd" placeholder="shell command" />
         <button type="submit">Run</button>
         <button type="button" class="ghost" id="term-kill">Kill</button>
       </form>
+      <div class="res">Live PTY (websocket frames: output streams, input writes stdin)</div>
+      <div class="res" id="pty-status">(no live pty)</div>
+      <pre class="term" id="pty-out"></pre>
+      <form id="pty-f">
+        <input id="pty-in" placeholder="type + Enter sends raw input (with newline)" />
+        <button type="submit">Send</button>
+      </form>
+      <p class="row">
+        <button class="ghost" id="pty-open">Open live pty</button>
+        <button class="ghost" id="pty-reconnect">Reconnect</button>
+        <button class="ghost" id="pty-close">Close</button>
+        <label class="res">rows <input id="pty-rows" placeholder="24" style="max-width:64px" /></label>
+        <label class="res">cols <input id="pty-cols" placeholder="80" style="max-width:64px" /></label>
+        <button class="ghost" id="pty-resize">Resize</button>
+      </p>
       <form id="proj-f">
         <input id="proj-dir" placeholder="project directory (empty = here)" />
         <button class="ghost" type="submit">Spawn here</button>
@@ -848,6 +864,88 @@
     termTimer = setInterval(termPoll, 1000);
   });
   $("term-kill").onclick = async () => { if (termID) { await window.jarvis.termKill(termID); termID = null; clearInterval(termTimer); } };
+  // Live PTY: frames stream over the main-process websocket; the renderer only
+  // appends chunks verbatim (frames are arbitrary splits, never lines).
+  let ptyID = null, ptyCursor = null;
+  let unPty = [];
+  const ptyStatus = (s) => { $("pty-status").textContent = s; };
+  function ptySubscribe() {
+    unPty.forEach((off) => { try { off(); } catch {} });
+    if (!window.jarvis?.onPtyData) return;
+    unPty = [
+      window.jarvis.onPtyData(({ ptyID: id, chunk, cursor }) => {
+        if (id !== ptyID) return;
+        $("pty-out").textContent += chunk;
+        $("pty-out").scrollTop = $("pty-out").scrollHeight;
+        if (cursor != null) ptyCursor = cursor;
+      }),
+      window.jarvis.onPtyMeta(({ ptyID: id, cursor }) => {
+        if (id !== ptyID) return;
+        ptyCursor = cursor;
+      }),
+      window.jarvis.onPtyExit(({ ptyID: id, code, reason }) => {
+        if (id !== ptyID) return;
+        ptyStatus(`live pty ${String(id).slice(0, 12)} closed (${code}${reason ? ` ${reason}` : ""})`);
+      }),
+    ];
+  }
+  ptySubscribe();
+  $("pty-open").onclick = async () => {
+    let openedID = null;
+    try {
+      if (ptyID) {
+        await window.jarvis.ptyClose(ptyID);
+        ptyID = null;
+      }
+      ptySubscribe();
+      const r = await window.jarvis.ptyOpen();
+      openedID = r.ptyID ?? r.id;
+      if (!openedID) throw new Error("pty open returned no id");
+      ptyID = openedID;
+      ptyCursor = null;
+      $("pty-out").textContent = "";
+      await window.jarvis.ptyAttach(ptyID);
+      ptyStatus(`live pty ${String(ptyID).slice(0, 12)} streaming`);
+    } catch (e) {
+      if (openedID) {
+        try { await window.jarvis.ptyClose(openedID); } catch {}
+        if (ptyID === openedID) ptyID = null;
+      }
+      ptyStatus(`pty open failed: ${e.message ?? e}`);
+    }
+  };
+  $("pty-reconnect").onclick = async () => {
+    if (!ptyID) { ptyStatus("(no live pty)"); return; }
+    try {
+      ptySubscribe();
+      await window.jarvis.ptyAttach(ptyID, ptyCursor ?? undefined);
+      ptyStatus(`live pty ${String(ptyID).slice(0, 12)} streaming (resumed @${ptyCursor ?? 0})`);
+    } catch (e) { ptyStatus(`pty reconnect failed: ${e.message ?? e}`); }
+  };
+  $("pty-close").onclick = async () => {
+    if (!ptyID) return;
+    try {
+      await window.jarvis.ptyClose(ptyID);
+      ptyStatus("(no live pty)");
+      ptyID = null;
+    } catch (e) { ptyStatus(`pty close failed: ${e.message ?? e}`); }
+  };
+  $("pty-f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!ptyID) { ptyStatus("(open a live pty first)"); return; }
+    const text = $("pty-in").value;
+    if (!text) return;
+    $("pty-in").value = "";
+    try { await window.jarvis.ptyWrite(ptyID, text + "\n"); }
+    catch (err) { ptyStatus(`pty write failed: ${err.message ?? err}`); }
+  });
+  $("pty-resize").onclick = async () => {
+    if (!ptyID) return;
+    const rows = parseInt($("pty-rows").value, 10) || 24;
+    const cols = parseInt($("pty-cols").value, 10) || 80;
+    try { await window.jarvis.ptyResize(ptyID, rows, cols); ptyStatus(`live pty resized ${rows}x${cols}`); }
+    catch (err) { ptyStatus(`pty resize failed: ${err.message ?? err}`); }
+  };
   $("proj-f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const dir = $("proj-dir").value.trim() || undefined;

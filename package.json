@@ -20,6 +20,7 @@
     "prove:cmdskill": "node scripts/prove-parity-cmdskill.mjs",
     "prove:diff": "node scripts/prove-parity-diff.mjs",
     "prove:terminal": "node scripts/prove-parity-terminal.mjs",
+    "prove:pty-live": "node scripts/prove-pty-live.mjs",
     "prove:mcp": "node scripts/prove-parity-mcp.mjs",
     "prove:workproj": "node scripts/prove-parity-workproj.mjs",
     "build:audio": "mkdir -p apps/audio-speech-analyzer/bin apps/audio-parakeet/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer && swiftc -O apps/audio-parakeet/src/sim.swift -o apps/audio-parakeet/bin/parakeet",

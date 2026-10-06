@@ -1,4 +1,10 @@
-# INTEGRATE-bootstrap (proposal — nothing wired yet)
+# INTEGRATE-bootstrap (implemented 2026-10-06 — proposal kept for history)
+
+Wired in `apps/main/src/main.js` (`fleet.spawn` gate via `ensureFleetOrAsk`,
+`bootstrap.answer`/`bootstrap.cancel` IPC, `bootStash` resume) and
+`apps/main/src/bootstrap.js`; deck blocking card in `apps/deck/index.html`.
+Proven by `scripts/prove-bootstrap.mjs` + `prove-integration.mjs`.
+Original proposal follows.
 
 ## Gate before dispatch
 In `main.js`, inside the `fleet.spawn` handler (today line ~201 calls

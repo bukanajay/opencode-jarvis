@@ -15,5 +15,7 @@ via OpenCode model list, no new keys). Local long-term memory.
 - [x] Default agent + auto mode (shell `set.defaultAgent`, `set.autoMode on|off`):
   no agent named → default; auto on → Jarvis picks from task text + fleet registry
 
-Pending details to lock when each slice starts: wake-word engine (transcript match
-vs always-on VAD), effort mapping (steps/variant), auto-pick heuristics.
+Still open (not started): embeddings/LLM fact extraction for memory
+(heuristic keywords today), narrower default permissions for created agents
+(bootstrap allows are broad by decision, flagged at creation), M5 live-mic
+verification (binary drop-in proven on Intel only).
