@@ -1,10 +1,12 @@
 // Jarvis brain: LangGraph loop, OpenCode session as the reasoner.
-// Nodes: recall → think → persist. Luna default, switchable via the OpenCode
+// Nodes: recall → think → act → persist. The brain session is read-only
+// (READONLY_PERMISSIONS): it may read the project to answer, never change it. Luna default, switchable via the OpenCode
 // model list (JARVIS_BRAIN_MODEL or setBrainModel). No new provider keys.
 import { StateGraph, Annotation } from "@langchain/langgraph";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureClient } from "../service.js";
+import { runTurn, isQuotaError, READONLY_PERMISSIONS, BRAIN_AGENT } from "../turn.js";
 import { getFleetRegistry } from "../autoroute.js";
 import { JARVIS_MODEL, JARVIS_FALLBACK_MODEL, parseModelRef } from "../sessions.js";
 import { loadMemory, remember, recall, extractCandidates } from "./memory.js";
@@ -42,52 +44,23 @@ export async function setBrainModel(providerID, id) {
   return brainModelUsed;
 }
 
-export async function ensureBrainSession(directory) {
+async function createBrainSession(directory, model) {
   const { client } = await ensureClient();
-  if (brainSessionID) return brainSessionID;
-  const m = wantedBrainModel();
-  const session = await client.session.create({ agent: "build", model: m, location: { directory } });
+  const session = await client.session.create({
+    agent: BRAIN_AGENT,
+    model,
+    location: { directory },
+    title: "jarvis brain",
+    permissions: READONLY_PERMISSIONS,
+  });
   brainSessionID = session.id;
-  brainModelUsed = m;
+  brainModelUsed = model;
   return brainSessionID;
 }
 
-async function runBrainTurn(sessionID, text, onDelta, timeoutMs = 90000, files) {
-  const { client } = await ensureClient();
-  return new Promise(async (resolve, reject) => {
-    const sub = client.event.subscribe();
-    let full = "";
-    const timer = setTimeout(() => resolve({ status: "timeout", text: full }), timeoutMs);
-    (async () => {
-      for await (const ev of sub) {
-        const d = ev.data ?? {};
-        if (d.sessionID !== sessionID) continue;
-        if (ev.type === "session.text.delta" && d.delta) {
-          const chunk = typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
-          full += chunk;
-          if (onDelta) onDelta(chunk);
-        }
-        if (ev.type === "session.execution.succeeded") {
-          clearTimeout(timer);
-          if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-          resolve({ status: "ok", text: full });
-          break;
-        }
-        if (ev.type === "session.execution.failed") {
-          clearTimeout(timer);
-          if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-          resolve({ status: "failed", text: full, error: d.error });
-          break;
-        }
-      }
-    })().catch(reject);
-    try {
-      await client.session.prompt(files?.length ? { sessionID, text, files } : { sessionID, text });
-    } catch (err) {
-      clearTimeout(timer);
-      reject(err);
-    }
-  });
+export async function ensureBrainSession(directory) {
+  if (brainSessionID) return brainSessionID;
+  return createBrainSession(directory, wantedBrainModel());
 }
 
 const BrainState = Annotation.Root({
@@ -169,7 +142,7 @@ export function buildThinkPrompt(text, memories, registry) {
   const fleetLine = (registry ?? []).length > 0
     ? `Fleet agents you can delegate to: ${(registry ?? []).map((a) => `${a.id}${a.description ? ` (${a.description.slice(0, 80)})` : ""}`).join("; ")}. Omit "agent" to let routing decide.\n`
     : `No fleet agents exist yet; do not emit dispatch fences, say what you need instead.\n`;
-  return `You are Jarvis, a concise voice-and-text assistant that can delegate work to a fleet of subagents. ${memLine}${fleetLine}When the user asks you to DO something (run, check, review, look at, create, find), you cannot act directly — you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply to one or two sentences. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
+  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
 }
 
 function buildGraph(handlers) {
@@ -184,13 +157,10 @@ function buildGraph(handlers) {
     const prompt = buildThinkPrompt(state.text, state.memories, registry);
     const sessionID = await ensureBrainSession(process.cwd());
     const filter = fencedFilter((d) => handlers.onDelta?.(d));
-    let r = await runBrainTurn(sessionID, prompt, (d) => filter.push(d), 90000, state.files);
-    if (r.status === "failed" && /quota|rate-limit|429/i.test(JSON.stringify(r.error ?? ""))) {
-      const { client: c2 } = await ensureClient();
-      const s2 = await c2.session.create({ agent: "build", model: JARVIS_FALLBACK_MODEL, location: { directory: process.cwd() } });
-      brainSessionID = s2.id;
-      brainModelUsed = JARVIS_FALLBACK_MODEL;
-      r = await runBrainTurn(s2.id, prompt, (d) => filter.push(d), 90000, state.files);
+    const turn = (sid) => runTurn(sid, prompt, { onDelta: (d) => filter.push(d), files: state.files });
+    let r = await turn(sessionID);
+    if (r.status === "failed" && isQuotaError(r.error)) {
+      r = await turn(await createBrainSession(process.cwd(), JARVIS_FALLBACK_MODEL));
     }
     filter.flush();
     return { reply: r.text, status: r.status };

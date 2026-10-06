@@ -266,10 +266,15 @@ app.whenReady().then(async () => {
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }).catch(async () => promptJarvis(text, (d) => {
-      // Brain fallback: direct session turn if the graph path fails.
-      win?.webContents.send("session.stream", { delta: d });
-    }, files?.length ? { files } : {}));
+    }).catch(async (err) => {
+      // Brain fallback: direct read-only turn if the graph path fails. Loud,
+      // so a broken brain never hides behind a working fallback.
+      console.error("brain failed, falling back to direct turn:", err?.message ?? err);
+      win?.webContents.send("session.stream", { delta: `[brain] ${String(err?.message ?? err).slice(0, 160)} — answering directly\n` });
+      return promptJarvis(text, (d) => {
+        win?.webContents.send("session.stream", { delta: d });
+      }, files?.length ? { files } : {});
+    });
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
     const dispatched = [];
     for (const w of r.warnings ?? []) {

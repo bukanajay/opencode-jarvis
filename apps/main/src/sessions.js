@@ -1,4 +1,5 @@
 import { ensureClient } from "./service.js";
+import { runTurn, isQuotaError, READONLY_PERMISSIONS, BRAIN_AGENT } from "./turn.js";
 
 export const JARVIS_MODEL = { providerID: "opencode-go", id: "gpt-6-luna" };
 export const JARVIS_FALLBACK_MODEL = { providerID: "opencode", id: "fledge-alpha-free" };
@@ -26,66 +27,34 @@ export async function ensureJarvisSession(directory, model) {
   return jarvisSessionID;
 }
 
-function sessionOf(ev, sessionID) {
-  const d = ev.data ?? {};
-  return d.sessionID === sessionID ? d : null;
+// Direct fallback when the brain graph fails: one read-only turn on its own
+// session. Never on the worker parent session, which runs the build agent.
+let directSessionID = null;
+let directModelUsed = null;
+
+async function createDirectSession(model) {
+  const { client } = await ensureClient();
+  const session = await client.session.create({
+    agent: BRAIN_AGENT,
+    model,
+    location: { directory: process.cwd() },
+    title: "jarvis direct",
+    permissions: READONLY_PERMISSIONS,
+  });
+  directSessionID = session.id;
+  directModelUsed = model;
+  return directSessionID;
 }
 
 export async function promptJarvis(text, onDelta, opts = {}) {
-  const { client } = await ensureClient();
   const wanted = opts.model ?? parseModelRef(process.env.JARVIS_MODEL) ?? JARVIS_MODEL;
-  let sessionID = await ensureJarvisSession(process.cwd(), wanted);
-  const runOnce = (sid) =>
-    new Promise(async (resolve, reject) => {
-      const sub = client.event.subscribe();
-      let full = "";
-      const timer = setTimeout(() => resolve({ status: "timeout", text: full }), opts.timeoutMs ?? 60000);
-      (async () => {
-        for await (const ev of sub) {
-          const d = sessionOf(ev, sid);
-          if (!d) continue;
-          if (ev.type === "session.text.delta" && d.delta) {
-            const chunk = typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
-            full += chunk;
-            if (onDelta) onDelta(chunk);
-          }
-          if (ev.type === "session.execution.succeeded") {
-            clearTimeout(timer);
-            if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-            resolve({ status: "ok", text: full });
-            break;
-          }
-          if (ev.type === "session.execution.failed") {
-            clearTimeout(timer);
-            if (typeof sub.return === "function") await sub.return(undefined).catch(() => {});
-            resolve({ status: "failed", text: full, error: d.error });
-            break;
-          }
-        }
-      })().catch(reject);
-      try {
-        await client.session.prompt(opts.files?.length ? { sessionID: sid, text, files: opts.files } : { sessionID: sid, text });
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-
-  let r = await runOnce(sessionID);
-  let modelUsed = jarvisModelUsed;
-  const quota = r.status === "failed" && JSON.stringify(r.error ?? "").match(/quota|rate-limit|429/i);
-  if (quota && (wanted.providerID !== JARVIS_FALLBACK_MODEL.providerID || wanted.id !== JARVIS_FALLBACK_MODEL.id)) {
-    const { client: c2 } = await ensureClient();
-    const s2 = await c2.session.create({
-      agent: "build",
-      model: JARVIS_FALLBACK_MODEL,
-      location: { directory: process.cwd() },
-    });
-    jarvisSessionID = s2.id;
-    jarvisModelUsed = JARVIS_FALLBACK_MODEL;
-    sessionID = s2.id;
-    modelUsed = JARVIS_FALLBACK_MODEL;
-    r = await runOnce(sessionID);
+  let sessionID = directSessionID ?? (await createDirectSession(wanted));
+  const turn = (sid) => runTurn(sid, text, { onDelta, timeoutMs: opts.timeoutMs, files: opts.files });
+  let r = await turn(sessionID);
+  const isFallback = wanted.providerID === JARVIS_FALLBACK_MODEL.providerID && wanted.id === JARVIS_FALLBACK_MODEL.id;
+  if (r.status === "failed" && isQuotaError(r.error) && !isFallback) {
+    sessionID = await createDirectSession(JARVIS_FALLBACK_MODEL);
+    r = await turn(sessionID);
   }
-  return { sessionID, modelUsed, ...r };
+  return { sessionID, modelUsed: directModelUsed, ...r };
 }
