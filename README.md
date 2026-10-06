@@ -134,3 +134,24 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
   (`from`=source dir, `branch`=base, `name`=new, `directory`=root) create-list-remove
   with branch cleanup; external-directory worker; session answers after compact.
   Yard project spawn + worktree list, work-view Compact.
+
+## Step 7 M5 audio (done on Intel 2026-10-06, M5 swap is a binary drop-in)
+
+`npm run prove:audio` -> `audio-ok`.
+
+* Contract first: `apps/audio-parakeet/protocol.md` locks the JSON-lines protocol
+  (`partial`/`final`/`status`, `--simulate`, `--stdin`). Both helpers speak it;
+  the deck never learns the engine.
+* `apps/audio-parakeet/src/sim.swift` (pure Foundation) compiles anywhere and is
+  protocol-identical to the Intel helper. `src/helper.swift` is the M5 live path:
+  Parakeet TDT 0.6B v3 via FluidAudio (`AsrModels.downloadAndLoad(version: .v3)`,
+  `AsrManager`, ANE), same protocol out. `Package.swift` pins the FluidAudio dep.
+* `apps/main/src/audio.js`: `JARVIS_AUDIO_ENGINE` selects `speech-analyzer`
+  (default) or `parakeet`; unknown engines rejected. `Utterance.engine` is
+  `speech-analyzer` or `parakeet-v3`, everything else identical — proven same keys,
+  same routing, no model involved.
+* M5 setup: `swift build -c release && cp .build/release/parakeet bin/parakeet`
+  (first run downloads the CoreML model once), grant Microphone, set
+  `JARVIS_AUDIO_ENGINE=parakeet`. Verify on M5 with `npm run prove:audio` plus one
+  live mic utterance. Open tuning items live in `helper.swift` (16 kHz resample,
+  VAD-gated windows) — verify, don't trust.

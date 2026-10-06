@@ -3,4 +3,5 @@ dist/
 *.log
 .DS_Store
 apps/audio-speech-analyzer/bin/
+apps/audio-parakeet/bin/
 package-lock.json

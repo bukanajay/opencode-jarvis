@@ -22,7 +22,8 @@
     "prove:terminal": "node scripts/prove-parity-terminal.mjs",
     "prove:mcp": "node scripts/prove-parity-mcp.mjs",
     "prove:workproj": "node scripts/prove-parity-workproj.mjs",
-    "build:audio": "mkdir -p apps/audio-speech-analyzer/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer",
+    "build:audio": "mkdir -p apps/audio-speech-analyzer/bin apps/audio-parakeet/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer && swiftc -O apps/audio-parakeet/src/sim.swift -o apps/audio-parakeet/bin/parakeet",
+    "prove:audio": "node scripts/prove-audio.mjs",
     "dev:main": "npm --workspace apps/main run dev",
     "dev:deck": "npm --workspace apps/deck run dev"
   }

@@ -1,12 +1,23 @@
-// Main-side audio ownership. Spawns the Swift speech-analyzer helper,
-// one utterance at a time. Partials -> renderer caption. Final -> Utterance
-// with source:"speech", routed through the SAME promptJarvis path as typed.
+// Main-side audio ownership. Spawns one utterance at a time from whichever
+// helper JARVIS_AUDIO_ENGINE selects. Both helpers speak protocol.md, so the
+// deck cannot tell engines apart. Final -> Utterance with source:"speech".
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const BIN = path.join(here, "../../audio-speech-analyzer/bin/speech-analyzer");
+
+export const ENGINES = {
+  "speech-analyzer": { bin: path.join(here, "../../audio-speech-analyzer/bin/speech-analyzer"), label: "speech-analyzer" },
+  parakeet: { bin: path.join(here, "../../audio-parakeet/bin/parakeet"), label: "parakeet-v3" },
+};
+
+export function resolveEngine(name) {
+  const key = name ?? process.env.JARVIS_AUDIO_ENGINE ?? "speech-analyzer";
+  const eng = ENGINES[key];
+  if (!eng) throw new Error(`unknown audio engine: ${key} (known: ${Object.keys(ENGINES).join(", ")})`);
+  return { key, ...eng };
+}
 
 let active = null;
 
@@ -23,11 +34,12 @@ export function stopListening() {
 
 // onPartial({ id, text, revision }) — renderer replaces caption, never appends.
 // Resolves { id, text } on final. Rejects on mic/speech denial or timeout.
-export function listenOnce({ onPartial, simulate, timeoutMs = 90000 } = {}) {
+export function listenOnce({ onPartial, simulate, timeoutMs = 90000, engine } = {}) {
   stopListening();
+  const eng = resolveEngine(engine);
   return new Promise((resolve, reject) => {
     const args = simulate ? ["--simulate", simulate] : [];
-    const child = spawn(BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(eng.bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     active = child;
     const done = (fn, val) => {
       if (active === child) active = null;
@@ -53,7 +65,7 @@ export function listenOnce({ onPartial, simulate, timeoutMs = 90000 } = {}) {
         } else if (msg.kind === "final") {
           clearTimeout(timer);
           try { child.kill("SIGKILL"); } catch {}
-          done(resolve, { id: msg.id, text: msg.text ?? "" });
+          done(resolve, { id: msg.id, text: msg.text ?? "", engine: eng.label });
         } else if (msg.kind === "status" && msg.state !== "listening") {
           if (msg.state === "mic-denied" || msg.state === "speech-denied" || msg.state === "unavailable" || msg.state === "mic-error") {
             clearTimeout(timer);
@@ -66,6 +78,6 @@ export function listenOnce({ onPartial, simulate, timeoutMs = 90000 } = {}) {
   });
 }
 
-export function toUtterance({ id, text }, engine = "speech-analyzer") {
-  return { id: id ?? Math.random().toString(36).slice(2), text, source: "speech", engine, committedAt: Date.now() };
+export function toUtterance({ id, text, engine }, fallback = "speech-analyzer") {
+  return { id: id ?? Math.random().toString(36).slice(2), text, source: "speech", engine: engine ?? fallback, committedAt: Date.now() };
 }

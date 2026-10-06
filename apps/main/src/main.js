@@ -158,12 +158,13 @@ app.whenReady().then(async () => {
     }
     return commitText(utterance.text, extra.files);
   });
-  ipcMain.handle("audio.start", async (_e, { simulate } = {}) => {
+  ipcMain.handle("audio.start", async (_e, { simulate, engine } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };
     const partials = [];
     try {
       const fin = await listenOnce({
         simulate,
+        engine,
         onPartial: (p) => {
           partials.push(p.text);
           win?.webContents.send("caption.partial", p);
