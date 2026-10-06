@@ -74,6 +74,17 @@
   section.chat #log { flex: 1; }
   #working { display: none; font-family: var(--cap); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); padding: 6px 0 0; }
   #working.show { display: block; }
+  /* System drawer: MCP + audit live here, off the main screen. */
+  #scrim { position: fixed; inset: 0; z-index: 55; background: rgba(3, 5, 6, 0.55); }
+  #drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+    width: min(380px, 92vw); padding: 16px;
+    background: var(--panel); border-left: 1px solid var(--line);
+    transform: translateX(105%); transition: transform 180ms ease;
+    overflow-y: auto; display: grid; gap: 12px; align-content: start;
+  }
+  #drawer.open { transform: none; }
+  #drawer details { margin: 0; }
   #working .dots::after { content: ""; animation: dots 1.2s steps(4) infinite; }
   @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
@@ -168,6 +179,8 @@
   <span class="tele">primary <b>jarvis</b></span>
   <span class="tele">model <b id="h-model">luna*</b></span>
   <span class="tele" id="h-state"><span class="pulse"></span> idle</span>
+  <span style="flex:1"></span>
+  <button class="ghost icon" id="drawer-btn" title="System panels (MCP, audit)" aria-label="Open system panels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
 </header>
 <main>
   <div class="deck">
@@ -259,7 +272,13 @@
     </div>
   </details>
 
-  <details id="mcp">
+  <div id="scrim" style="display:none;"></div>
+  <aside id="drawer" aria-label="System panels">
+    <div class="row" style="justify-content:space-between;">
+      <span class="tele">system</span>
+      <button class="ghost icon" id="drawer-x" aria-label="Close panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  <details id="mcp" open>
     <summary>MCP <span class="res" id="mcp-sum"></span></summary>
     <div class="body">
     <div class="res" id="mcp-list"></div>
@@ -267,13 +286,14 @@
     </div>
   </details>
 
-  <details id="audit-details">
+  <details id="audit-details" open>
     <summary>Settings — audit log</summary>
     <div class="body">
     <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;min-height:44px;"></div>
     <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
     </div>
   </details>
+  </aside>
 
   <!-- compat anchors kept for wiring -->
   <section id="perm" style="display:none" aria-hidden="true">
@@ -816,7 +836,19 @@
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work-x").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work").addEventListener("click", (e) => { if (e.target === $("work")) { selected = null; $("work").classList.remove("show"); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { selected = null; $("work").classList.remove("show"); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { selected = null; $("work").classList.remove("show"); closeDrawer(); } });
+  function openDrawer() {
+    $("drawer").classList.add("open");
+    $("scrim").style.display = "block";
+    if ($("mcp").open) mcpRefresh();
+  }
+  function closeDrawer() {
+    $("drawer").classList.remove("open");
+    $("scrim").style.display = "none";
+  }
+  $("drawer-btn").onclick = openDrawer;
+  $("drawer-x").onclick = closeDrawer;
+  $("scrim").onclick = closeDrawer;
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("q").value.trim();
