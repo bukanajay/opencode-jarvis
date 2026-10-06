@@ -8,13 +8,14 @@ import { ensureClient } from "../apps/main/src/service.js";
 // Voice/hand routing is pure and tested here, not just wired.
 const routingCases = [
   ["allow", true, "permission"], ["yes", true, "permission"], ["deny", true, "permission"], ["no", true, "permission"],
-  ["allow", false, "prompt"], ["dim the fleet", true, "prompt"], ["stop the worker", false, "stop-worker"],
+  ["allow", false, "prompt"], ["dim the fleet", true, "app.command"], ["stop the worker", false, "stop-worker"],
+  ["use the amber accent", false, "app.command"],
 ];
 for (const [text, pending, want] of routingCases) {
   const got = routeUtterance(text, pending).route;
   if (got !== want) throw new Error(`route ${JSON.stringify(text)} pending=${pending}: got ${got}, want ${want}`);
-  // Flaky-transcript guard: near-miss control words must NOT trigger controls.
-  if (text === "dim the fleet" && got !== "prompt") throw new Error("eval leak");
+  // Flaky-transcript guard: near-miss permission words must NOT answer the gate.
+  if (routeUtterance("dim the fleet", true).route === "permission") throw new Error("eval leak");
 }
 console.log("route-ok: allow/deny/stop route to controls, everything else prompts");
 

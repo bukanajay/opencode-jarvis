@@ -5,6 +5,10 @@ import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
 import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance } from "./fleet.js";
+import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
+
+let shell = null;
+const shellStore = () => (shell ??= loadStore());
 
 
 async function answerPending(decision) {
@@ -53,6 +57,12 @@ app.whenReady().then(async () => {
       await stopWorker(w.sessionID);
       broadcast({ kind: "fleet.state", snapshot: snapshot() });
       return { ok: true, control: "stop-worker", sessionID: w.sessionID };
+    }
+    if (routed.route === "app.command") {
+      // Shell bucket: applied next frame, persisted, no model call.
+      const entry = applyAppCommand(shellStore(), routed.name, routed.args);
+      broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+      return { ok: true, control: "app.command", entry };
     }
     const r = await promptJarvis(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
@@ -118,6 +128,17 @@ app.whenReady().then(async () => {
     await replyPermission(requestID, decision);
     return { ok: true, requestID, decision };
   });
+  ipcMain.handle("app.command", async (_e, { name, args } = {}) => {
+    const entry = applyAppCommand(shellStore(), name, args);
+    broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+    return { ok: true, entry };
+  });
+  ipcMain.handle("settings.get", async () => ({
+    ok: true,
+    settings: shellStore().settings,
+    audit: shellStore().audit,
+    accents: ACCENTS,
+  }));
   await createWindow();
 });
 

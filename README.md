@@ -71,3 +71,21 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * Deck: DOM ring (center Jarvis, workers on ring), work view per worker
   (transcript + tool trace), three WebAudio sounds (permission/done/fault).
   `WORKER_MODEL` env selects the worker model; Luna stays the Jarvis default.
+
+## Step 4 Shell by voice (done 2026-10-06)
+
+`node scripts/prove-shell.mjs` -> `shell-ok`. No model calls.
+
+* `apps/main/src/shell.js`: app-owned store (`~/.config/jarvis/shell.json`,
+  `JARVIS_SHELL_FILE` override), allowlist `set.accent|density|layout|captionSize|
+  audioDevice|wake`, value enums, audit entries `{bucket: shell, live: true}`.
+* `matchAppCommand` is exact and enumerable — 9 phrases incl. `use the amber accent`
+  and `dim the fleet` (→ `set.accent dim`). Widening (`let every agent run any
+  shell command`), model work, and unknown accents never match.
+* `routeUtterance` checks app commands before the model path, after the pending
+  permission gate. One stale fleet assertion updated: `dim the fleet` is now
+  `app.command` even mid-gate, by spec.
+* Exit proven: amber applied synchronously (`apply-ok`), same file re-read by a
+  fresh store (`persist-ok`), unknown values and non-allowlisted commands rejected
+  (`validate-ok`). Deck paints `--accent`/`captionSize` on `settings.applied` and
+  keeps the audit log as the settings surface.

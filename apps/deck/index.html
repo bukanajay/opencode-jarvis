@@ -24,6 +24,7 @@
   #perm { display:none; border-color:#ff5d5d; }
   #perm.show { display:block; }
   #perm .res { font-family:ui-monospace, monospace; font-size:12px; }
+  .res { font-family:ui-monospace, monospace; font-size:12px; color:var(--dim); }
   #perm button { margin-right:8px; }
   button { padding:8px 14px; background:var(--accent); border:0; font-weight:700; cursor:pointer; }
   button.ghost { background:#14201e; color:var(--accent); border:1px solid var(--accent); }
@@ -71,6 +72,11 @@
       <button type="button" class="ghost" id="mic">Mic</button>
     </form>
     <div id="log" aria-live="polite"></div>
+  </section>
+  <section>
+    <h2>Settings — audit log</h2>
+    <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px;min-height:44px;"></div>
+    <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
   </section>
 </main>
 <script>
@@ -140,6 +146,32 @@
   window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
   window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; log.textContent += "\n> (speech) " + text + "\n"; });
   window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
+  // Shell settings: audit log, not the only way to change them. Applied next frame.
+  const auditEl = () => document.getElementById("audit");
+  let ACC = { phosphor: "#c8f04a" };
+  function paintSettings(s) {
+    if (s.accent && ACC[s.accent]) document.documentElement.style.setProperty("--accent", ACC[s.accent]);
+    if (s.captionSize) cap.style.fontSize = { small: "12px", medium: "14px", large: "18px" }[s.captionSize] ?? "14px";
+    document.body.dataset.density = s.density ?? "";
+    document.body.dataset.layout = s.layout ?? "";
+  }
+  function auditRow(e) {
+    return `[${new Date(e.at).toLocaleTimeString()}] ${e.bucket}: ${e.what}${e.needsRestart ? " (restart needed)" : ""}`;
+  }
+  window.jarvis?.onSettings(({ entry, settings }) => {
+    paintSettings(settings);
+    const el = auditEl();
+    if (el) el.textContent += auditRow(entry) + "\n";
+    log.textContent += `\n[settings] ${entry.what} — live\n`;
+    sndDone();
+  });
+  window.jarvis?.settingsGet().then((r) => {
+    if (!r?.ok) return;
+    ACC = r.accents ?? ACC;
+    paintSettings(r.settings);
+    const el = auditEl();
+    if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
+  });
 
   $("allow").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "allow"); $("perm").classList.remove("show"); };
   $("deny").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "deny"); $("perm").classList.remove("show"); };

@@ -173,6 +173,8 @@ export function latestActiveWorker() {
   return order.find((w) => w.state === "working" || w.state === "permission" || w.state === "idle") ?? null;
 }
 
+import { matchAppCommand } from "./shell.js";
+
 // Pure routing: control phrase vs model prompt. Main decides; flaky transcripts cannot eval.
 export function routeUtterance(text, hasPending = pendingPermissions.size > 0) {
   const t = String(text ?? "").trim().toLowerCase();
@@ -180,6 +182,8 @@ export function routeUtterance(text, hasPending = pendingPermissions.size > 0) {
     if (/^(allow|yes|approve|grant)(\s+once)?$/.test(t)) return { route: "permission", decision: "allow" };
     if (/^(deny|no|reject|block)$/.test(t)) return { route: "permission", decision: "deny" };
   }
+  const app = matchAppCommand(text);
+  if (app) return { route: "app.command", ...app };
   if (/^stop( the)? worker$/.test(t)) return { route: "stop-worker" };
   return { route: "prompt" };
 }
