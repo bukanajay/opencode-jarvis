@@ -9,6 +9,8 @@
     "apps/*"
   ],
   "scripts": {
+    "test": "node --test \"tests/unit/*.test.mjs\"",
+    "check": "node scripts/check-syntax.mjs",
     "prove:server": "node scripts/prove-server.mjs",
     "prove:voice": "node scripts/prove-voice.mjs",
     "prove:fleet": "node scripts/prove-fleet.mjs",
