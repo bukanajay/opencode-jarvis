@@ -10,6 +10,7 @@ import { getFleetRegistry } from "../autoroute.js";
 import { JARVIS_MODEL, JARVIS_FALLBACK_MODEL, parseModelRef } from "../sessions.js";
 import { loadMemory, saveMemory, remember, extractCandidates, loadProjectMemory, recallAll, extractProjectCandidates } from "./memory.js";
 import { projectDir, projectName } from "../project.js";
+import { speechFor } from "../speech.js";
 import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
 
@@ -65,6 +66,8 @@ export async function ensureBrainSession(directory = projectDir()) {
 const BrainState = Annotation.Root({
   text: Annotation({ reducer: (_a, b) => b, default: () => "" }),
   files: Annotation({ reducer: (_a, b) => b, default: () => [] }),
+  voice: Annotation({ reducer: (_a, b) => b, default: () => false }),
+  speak: Annotation({ reducer: (_a, b) => b, default: () => null }),
   memories: Annotation({ reducer: (_a, b) => b, default: () => [] }),
   reply: Annotation({ reducer: (_a, b) => b, default: () => "" }),
   status: Annotation({ reducer: (_a, b) => b, default: () => "ok" }),
@@ -79,8 +82,8 @@ const BrainState = Annotation.Root({
 // can hold them back and the transcript stays readable. Only these shapes
 // execute; everything else is words. Malformed fences are ignored with a
 // warning, never executed.
-const FENCE_RE = /^```(dispatch|followup)\s+(.+?)\s*```[ \t]*$/gm;
-const DISPATCH_LINE = /^\s*```(?:dispatch|followup)\s+\{.*\}\s*```\s*$/;
+const FENCE_RE = /^```(dispatch|followup|speak)\s+(.+?)\s*```[ \t]*$/gm;
+const DISPATCH_LINE = /^\s*```(?:dispatch|followup|speak)\s+\{.*\}\s*```\s*$/;
 
 function parseFences(reply, kind, allowed) {
   const out = [];
@@ -148,14 +151,19 @@ export function fencedFilter(forward) {
   };
 }
 
-export function buildThinkPrompt(text, memories, registry, project = null) {
+// Voice mode: the reply is also spoken, so ask for a short spoken line the
+// streamer holds back like any fence. The full reply still goes to the
+// transcript; speechFor() falls back to a local summary if this is missing.
+export const VOICE_ADDENDUM = `The user is listening by voice. Also add exactly one single-line fence with what you would SAY out loud: one or two short plain sentences (under 40 words) summarising your reply, no code, file paths, symbols or markdown:\n\`\`\`speak {"text": "<spoken summary>"}\`\`\`\n`;
+
+export function buildThinkPrompt(text, memories, registry, project = null, { voice = false } = {}) {
   const projLine = project?.dir ? `Current project: ${project.name} (${project.dir}). ` : "";
   const memLine = memories.length > 0
     ? `What you remember about the user:\n- ${memories.join("\n- ")}\n` : "";
   const fleetLine = (registry ?? []).length > 0
     ? `Fleet agents you can delegate to: ${(registry ?? []).map((a) => `${a.id}${a.description ? ` (${a.description.slice(0, 80)})` : ""}`).join("; ")}. Omit "agent" to let routing decide.\n`
     : `No fleet agents exist yet; do not emit dispatch fences, say what you need instead.\n`;
-  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a fence. User: ${text}`;
+  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a dispatch fence. ${voice ? VOICE_ADDENDUM : ""}User: ${text}`;
 }
 
 // One streamed turn on the brain session, fences held back from the stream.
@@ -190,7 +198,7 @@ function buildGraph(handlers) {
   g.addNode("think", async (state) => {
     const { client } = await ensureClient();
     const registry = await getFleetRegistry(client, projectDir()).catch(() => []);
-    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() });
+    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice });
     const r = await brainTurn(prompt, handlers.onDelta, state.files);
     return { reply: r.text, status: r.status };
   });
@@ -200,7 +208,8 @@ function buildGraph(handlers) {
     // the fences so the transcript stays readable.
     if (state.status !== "ok") return { dispatches: [], warnings: [] };
     const { dispatches, warnings } = parseDispatches(state.reply);
-    return { reply: stripDispatches(state.reply), dispatches, warnings };
+    const speak = state.voice ? speechFor(state.reply) : null;
+    return { reply: stripDispatches(state.reply), dispatches, warnings, speak };
   });
   g.addNode("persist", async (state) => {
     // "remember for this project …" goes to project memory; everything else
@@ -226,9 +235,9 @@ function buildGraph(handlers) {
 export function brainRespond(text, onDelta, opts = {}) {
   return serialize(async () => {
     compiled = buildGraph({ onDelta });
-    const out = await compiled.invoke({ text, files: opts.files ?? [] });
+    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true });
     compiled = null;
-    return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [] };
+    return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [], speak: out.speak ?? null };
   });
 }
 
@@ -251,7 +260,7 @@ export function decideReview(reply, round, maxRounds = MAX_ROUNDS) {
 // Review turn for a finished worker: report in, streamed verdict out, at most
 // one next step (followup to the same worker, or a new dispatch). Execution
 // stays in main, like brainRespond.
-export function brainReview(report, onDelta) {
+export function brainReview(report, onDelta, { voice = false } = {}) {
   return serialize(async () => {
     const { client } = await ensureClient();
     // Review in the worker's own project, even if the user switched away.
@@ -260,9 +269,10 @@ export function brainReview(report, onDelta) {
       recallAll(report.task, 6, directory).then((fs) => fs.map((f) => f.text)).catch(() => []),
       getFleetRegistry(client, directory).catch(() => []),
     ]);
-    const r = await brainTurn(buildReviewPrompt(report, { memories, registry }), onDelta, undefined, directory);
-    if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [] };
+    const prompt = buildReviewPrompt(report, { memories, registry }) + (voice ? `\n${VOICE_ADDENDUM}` : "");
+    const r = await brainTurn(prompt, onDelta, undefined, directory);
+    if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [], speak: null };
     const decision = decideReview(r.text, report.round);
-    return { reply: stripDispatches(r.text), status: r.status, modelUsed: brainModelUsed, ...decision };
+    return { reply: stripDispatches(r.text), status: r.status, modelUsed: brainModelUsed, ...decision, speak: voice ? speechFor(r.text) : null };
   });
 }

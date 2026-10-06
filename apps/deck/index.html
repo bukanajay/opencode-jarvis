@@ -200,6 +200,27 @@
   #voice.on { background: var(--accent); color: #0a0d05; }
   @keyframes micbreathe { 0%, 100% { box-shadow: 0 0 10px rgba(200, 240, 74, 0.3); } 50% { box-shadow: 0 0 26px rgba(200, 240, 74, 0.6); } }
   #mic { min-width: 76px; }
+  /* Voice focus: voice mode hides the transcript so the ring and Jarvis take
+     the deck; captions and controls float over the ring. "Transcript" pins it
+     back (still listening and speaking); voice off restores the normal deck. */
+  body.voice-focus .deck { grid-template-columns: minmax(0, 1fr); }
+  body.voice-focus section.chat { display: none; }
+  body.voice-focus #ring-legend { display: none; }
+  body.voice-focus section.fleet { animation: cardin 220ms ease; }
+  #voice-bar {
+    display: none; position: absolute; left: 12px; right: 12px; bottom: 12px;
+    flex-direction: column; align-items: center; gap: 8px; pointer-events: none; text-align: center;
+  }
+  body.voice-focus #voice-bar { display: flex; }
+  #voice-bar > * { pointer-events: auto; }
+  #vb-status { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+  #vb-status.speaking, #vb-status.thinking { color: var(--accent); }
+  #vb-say { max-width: min(720px, 100%); font-size: 16px; line-height: 1.45; color: var(--ink); min-height: 1.45em; }
+  #vb-cap { max-width: min(720px, 100%); font-size: 13px; color: var(--dim); min-height: 1.3em; }
+  #vb-cap:not(:empty)::before { content: "you · "; color: var(--dim); opacity: 0.7; }
+  #voice-bar .row { justify-content: center; }
+  #chat-hide { display: none; float: right; margin-top: -4px; font-size: 11px; padding: 3px 9px; }
+  body.voice-on #chat-hide { display: inline-flex; }
   #caption { min-height: 24px; font-size: 14px; color: var(--ink); opacity: 0.9; }
   #caption:empty::before { content: "captions always on — speak or type"; color: var(--dim); font-size: 12.5px; }
   details { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -235,7 +256,17 @@
   <div class="deck">
     <section class="fleet">
       <h2>Fleet <span class="live" id="fleet-count"></span></h2>
-      <div id="ring-wrap"><canvas id="ring"></canvas></div>
+      <div id="ring-wrap"><canvas id="ring"></canvas>
+        <div id="voice-bar">
+          <div id="vb-status" aria-live="polite">listening</div>
+          <div id="vb-say" aria-live="polite"></div>
+          <div id="vb-cap"></div>
+          <div class="row">
+            <button type="button" class="ghost" id="vb-show" title="Show the transcript; voice mode stays on">Transcript</button>
+            <button type="button" class="ghost" id="vb-off" title="Turn voice mode off">Voice off</button>
+          </div>
+        </div>
+      </div>
       <div id="ring-legend">
         <span><i style="background:var(--accent)"></i>working</span>
         <span><i style="background:#3a4a45"></i>idle</span>
@@ -243,7 +274,7 @@
       </div>
     </section>
     <section class="chat">
-      <h2>Transcript</h2>
+      <h2>Transcript <button type="button" class="ghost" id="chat-hide" title="Hide the transcript and give the deck to Jarvis">Hide</button></h2>
       <div id="log" aria-live="polite"></div>
       <div id="working" aria-hidden="true"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></div>
       <div id="caption" aria-live="polite"></div>
@@ -402,9 +433,28 @@
     ring.height = Math.max(1, Math.round((r.height || 430) * dpr));
     seedStars();
   }
+  // Voice focus gives the ring the whole deck: wider orbit, bigger Jarvis.
+  const focusMode = () => document.body.classList.contains("voice-focus");
+  // In focus mode the caption strip owns the bottom of the canvas; the ring
+  // centres in the space above it so nothing orbits under the subtitles.
+  function ringGeom(W, H) {
+    if (!focusMode()) return { cx: W / 2, cy: H / 2, R: Math.min(W * 0.36, H * 0.34) };
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const bar = $("voice-bar");
+    const reserve = Math.min(H * 0.45, ((bar?.offsetHeight ?? 0) + 18) * dpr);
+    const h = H - reserve;
+    return { cx: W / 2, cy: h / 2, R: Math.min(W * 0.4, h * 0.4) };
+  }
+  const ringRadius = (W, H) => ringGeom(W, H).R;
+  // Layout switches jump nodes to their new places instead of a long slide.
+  function snapNodes() {
+    for (const n of nodes.values()) { n.x = n.tx; n.y = n.ty; }
+  }
+  // Speech state for the canvas: energy jumps on each spoken word and decays.
+  const tts = { speaking: false, energy: 0, lastWord: 0, lastFrame: null };
   function layoutTargets() {
     const W = ring.width, H = ring.height;
-    const cx = W / 2, cy = H / 2, R = Math.min(W * 0.36, H * 0.34);
+    const { cx, cy, R } = ringGeom(W, H);
     let j = nodes.get("__jarvis");
     if (!j) { j = { x: cx, y: cy, tx: cx, ty: cy }; nodes.set("__jarvis", j); }
     j.tx = cx;
@@ -437,6 +487,7 @@
     const wantW = Math.max(1, Math.round(ring.getBoundingClientRect().width * Math.min(window.devicePixelRatio || 1, 2)));
     const wantH = Math.max(1, Math.round(ring.getBoundingClientRect().height * Math.min(window.devicePixelRatio || 1, 2)));
     if (ring.width !== wantW || ring.height !== wantH) { sizeCanvas(); layoutTargets(); }
+    else if (focusMode()) layoutTargets(); // caption strip height can change under the ring
     const W = ring.width, H = ring.height, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const t = (reduceMotion ? 0 : now / 1000);
     ctx.clearRect(0, 0, W, H);
@@ -455,29 +506,78 @@
     for (let y = step / 2; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
     // orbit + slow sweep (a true circle: radius follows the smaller dimension)
-    const R = Math.min(W * 0.36, H * 0.34);
+    const { cx: gx, cy: gy, R } = ringGeom(W, H);
     ctx.strokeStyle = "rgba(120,150,140,0.28)";
     ctx.beginPath();
-    ctx.arc(W / 2, H / 2, R, 0, Math.PI * 2);
+    ctx.arc(gx, gy, R, 0, Math.PI * 2);
     ctx.stroke();
     if (!reduceMotion) {
       const sa = t * (Math.PI * 2 / (busy ? 2.5 : 9)); // sweep quickens while working
       ctx.strokeStyle = busy ? "rgba(200,240,74,0.4)" : "rgba(200,240,74,0.22)";
       ctx.lineWidth = 2 * dpr / 2;
       ctx.beginPath();
-      ctx.arc(W / 2, H / 2, R, sa, sa + 0.7);
+      ctx.arc(gx, gy, R, sa, sa + 0.7);
       ctx.stroke();
     }
     // jarvis center: eased to the true center, sized to the orbit
-    const j = nodes.get("__jarvis") ?? { x: W / 2, y: H / 2, tx: W / 2, ty: H / 2 };
+    const j = nodes.get("__jarvis") ?? { x: gx, y: gy, tx: gx, ty: gy };
     nodes.set("__jarvis", j);
     const jk = 1 - Math.pow(0.001, 1 / 60);
     j.x += (j.tx - j.x) * jk;
     j.y += (j.ty - j.y) * jk;
-    const breathe = 1 + (reduceMotion ? 0 : (busy ? 0.16 : 0.10) * Math.sin(t * (busy ? 3.2 : 1.1)));
-    const jr = Math.max(30 * dpr / 2, R * 0.17) * breathe;
+    // Speaking: word boundaries kick energy to 1; voices without boundary
+    // events get a synthetic pulse so the core still visibly talks.
+    if (tts.speaking && !reduceMotion && now - tts.lastWord > 260) {
+      tts.energy = Math.max(tts.energy, 0.38 + 0.22 * Math.sin(t * 9.1) * Math.sin(t * 3.7));
+    }
+    // time-based decay: the same fade at any frame rate (throttled windows too)
+    const steps = Math.min(30, Math.max(0, (now - (tts.lastFrame ?? now)) / 33));
+    tts.lastFrame = now;
+    tts.energy *= Math.pow(tts.speaking ? 0.9 : 0.7, steps);
+    const talk = tts.speaking ? Math.max(0.15, tts.energy) : tts.energy;
+    const breathe = 1 + (reduceMotion ? 0 : talk > 0.02 ? 0.05 + 0.1 * talk : (busy ? 0.16 : 0.10) * Math.sin(t * (busy ? 3.2 : 1.1)));
+    const jr = Math.max((focusMode() ? 46 : 30) * dpr / 2, R * (focusMode() ? 0.26 : 0.17)) * breathe;
+    const acc = accent();
+    if (talk > 0.02) {
+      // ripples out of the core + a radial waveform hugging it
+      if (!reduceMotion) {
+        for (let k = 0; k < 3; k++) {
+          const ph = (t * 0.9 + k / 3) % 1;
+          ctx.globalAlpha = (1 - ph) * 0.45 * Math.min(1, talk * 1.6);
+          ctx.strokeStyle = acc;
+          ctx.lineWidth = 1.5 * dpr;
+          ctx.beginPath(); ctx.arc(j.x, j.y, jr * (1.15 + ph * 1.6), 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = acc;
+      ctx.lineWidth = Math.max(1.5, 2.2 * dpr / 2);
+      ctx.lineCap = "round";
+      const bars = 56;
+      ctx.beginPath();
+      for (let b = 0; b < bars; b++) {
+        const a = (b / bars) * Math.PI * 2;
+        const wob = reduceMotion ? 0.6 : 0.5 + 0.5 * Math.sin(t * 11 + b * 1.7) * Math.cos(t * 5.3 + b * 0.9);
+        const len = jr * (0.07 + 0.42 * talk * wob);
+        const r0 = jr * 1.12;
+        ctx.moveTo(j.x + Math.cos(a) * r0, j.y + Math.sin(a) * r0);
+        ctx.lineTo(j.x + Math.cos(a) * (r0 + len), j.y + Math.sin(a) * (r0 + len));
+      }
+      ctx.stroke();
+      ctx.lineCap = "butt";
+      ctx.globalAlpha = 1;
+    } else if (focusMode() && !busy) {
+      // listening: a slow dashed halo
+      ctx.save();
+      ctx.strokeStyle = "rgba(200,240,74,0.35)";
+      ctx.lineWidth = 1.2 * dpr;
+      ctx.setLineDash([4 * dpr, 7 * dpr]);
+      ctx.lineDashOffset = reduceMotion ? 0 : -t * 12 * dpr;
+      ctx.beginPath(); ctx.arc(j.x, j.y, jr * 1.35, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
     const jg = ctx.createRadialGradient(j.x, j.y, 4, j.x, j.y, jr * 2.2);
-    jg.addColorStop(0, busy ? "rgba(200,240,74,0.5)" : "rgba(200,240,74,0.32)");
+    jg.addColorStop(0, talk > 0.02 ? `rgba(200,240,74,${(0.4 + 0.35 * talk).toFixed(3)})` : busy ? "rgba(200,240,74,0.5)" : "rgba(200,240,74,0.32)");
     jg.addColorStop(1, "rgba(200,240,74,0)");
     ctx.fillStyle = jg;
     ctx.beginPath(); ctx.arc(j.x, j.y, jr * 2.2, 0, Math.PI * 2); ctx.fill();
@@ -489,8 +589,8 @@
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("J", j.x, j.y + dpr);
     ctx.fillStyle = "rgba(160,180,170,0.9)";
-    ctx.font = `${10 * dpr / 2}px ui-monospace, monospace`;
-    ctx.fillText("JARVIS", j.x, j.y + jr + 12 * dpr / 2);
+    ctx.font = `${(focusMode() ? 12 : 10) * dpr / 2}px ui-monospace, monospace`;
+    ctx.fillText("JARVIS", j.x, j.y + jr * (talk > 0.02 ? 1.7 : 1) + 12 * dpr / 2);
     // workers
     const fs = (11 * dpr) / 2, cs = (9.5 * dpr) / 2;
     for (const w of workers) {
@@ -752,8 +852,8 @@
     scrollLog();
     return row;
   }
-  const showWorking = () => { busy = true; $("working").classList.add("show"); scrollLog(); };
-  const hideWorking = () => { busy = false; $("working").classList.remove("show"); };
+  const showWorking = () => { busy = true; $("working").classList.add("show"); scrollLog(); paintVoiceStatus(); };
+  const hideWorking = () => { busy = false; $("working").classList.remove("show"); paintVoiceStatus(); };
   window.jarvis?.onStream(({ delta }) => {
     if (!streamBody) {
       const m = addMsg("jarvis", "");
@@ -843,8 +943,8 @@
     pumpNoticeAt = Date.now();
     addSys(`fleet event stream lost — reconnecting (attempt ${attempt})`, { bad: true });
   });
-  window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
-  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; addYou(text, { name: "You · speech" }); });
+  window.jarvis?.onCaption(({ text }) => { cap.textContent = text; $("vb-cap").textContent = text; });
+  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; $("vb-cap").textContent = text; addYou(text, { name: "You · speech" }); showWorking(); });
   window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
 
   const auditEl = () => document.getElementById("audit");
@@ -875,15 +975,88 @@
     if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
   });
   let defaultAgent = "build";
+  // Voice layout: voice mode hides the transcript (voice-focus) unless the
+  // user pinned it back; turning voice off always restores it.
+  let voiceOn = false, transcriptPinned = false, wakeWord = "jarvis";
+  function applyVoiceLayout() {
+    document.body.classList.toggle("voice-on", voiceOn);
+    document.body.classList.toggle("voice-focus", voiceOn && !transcriptPinned);
+    if (!voiceOn) stopSpeaking();
+    // canvas box changes size: re-fit and re-place nodes on the next frame
+    setTimeout(() => { sizeCanvas(); layoutTargets(); snapNodes(); requestFrame(); }, 0);
+    paintVoiceStatus();
+  }
   function paintVoice(s) {
     const b = $("voice");
     if (!b) return;
     const on = s.voiceMode === "on";
+    if (s.wake) wakeWord = s.wake;
     b.classList.toggle("on", on);
     b.title = `Voice mode ${on ? "on — listening for the wake word" : "off"}`;
+    if (on !== voiceOn) {
+      voiceOn = on;
+      if (!on) transcriptPinned = false;
+      applyVoiceLayout();
+    }
   }
+  $("vb-show").onclick = () => { transcriptPinned = true; applyVoiceLayout(); };
+  $("chat-hide").onclick = () => { transcriptPinned = false; applyVoiceLayout(); };
+  $("vb-off").onclick = () => window.jarvis.appCommand("set.voiceMode", { value: "off" });
+  function paintVoiceStatus() {
+    const el = $("vb-status");
+    const state = tts.speaking ? "speaking" : busy ? "thinking" : "listening";
+    const text = state === "listening" ? `listening for “hey ${wakeWord}”` : state;
+    if (el.textContent !== text) el.textContent = text;
+    el.className = state;
+  }
+
+  // Spoken replies (voice mode). Main sends a short summary; the full reply
+  // stays in the transcript. Main is told when we talk so the mic ignores us.
+  let ttsToken = 0;
+  function pickVoice() {
+    const voices = window.speechSynthesis?.getVoices?.() ?? [];
+    return voices.find((v) => /daniel/i.test(v.name) && /^en/i.test(v.lang))
+      ?? voices.find((v) => /^en-GB/i.test(v.lang))
+      ?? voices.find((v) => /^en/i.test(v.lang) && v.default)
+      ?? voices.find((v) => /^en/i.test(v.lang))
+      ?? null;
+  }
+  function setTalking(on) {
+    tts.speaking = on;
+    window.jarvis?.ttsState?.(on);
+    if (!on) $("vb-say").textContent = "";
+    paintVoiceStatus();
+    requestFrame();
+  }
+  function speakText(text) {
+    const synth = window.speechSynthesis;
+    if (!synth || !voiceOn || !text) return;
+    const my = ++ttsToken;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice();
+    if (v) u.voice = v;
+    u.rate = 1.03;
+    u.pitch = 0.95;
+    u.onstart = () => { if (my !== ttsToken) return; $("vb-say").textContent = text; setTalking(true); };
+    u.onboundary = (e) => { if (my !== ttsToken || e.name === "sentence") return; tts.energy = 1; tts.lastWord = performance.now(); };
+    const end = () => { if (my === ttsToken) setTalking(false); };
+    u.onend = end;
+    u.onerror = end;
+    synth.speak(u);
+    // Some engines never fire onstart; tell main anyway so echo is gated.
+    setTimeout(() => { if (my === ttsToken && !tts.speaking && synth.speaking) { $("vb-say").textContent = text; setTalking(true); } }, 400);
+  }
+  function stopSpeaking() {
+    ttsToken++;
+    window.speechSynthesis?.cancel();
+    if (tts.speaking) setTalking(false);
+  }
+  window.jarvis?.onUtteranceSettled?.(() => hideWorking());
+  window.jarvis?.onSpeak?.(({ text }) => speakText(text));
+  window.jarvis?.onSpeakStop?.(() => stopSpeaking());
   window.jarvis?.onSettings(({ entry, settings }) => {
-    if (entry.what.startsWith("set.voiceMode") || entry.what.startsWith("set.autoMode") || entry.what.startsWith("set.defaultAgent")) {
+    if (/^set\.(voiceMode|autoMode|defaultAgent|wake)\b/.test(entry.what)) {
       if (settings.defaultAgent) defaultAgent = settings.defaultAgent;
       paintVoice(settings);
     }
@@ -1276,6 +1449,7 @@
   const micBtn = $("mic");
   micBtn.onclick = async () => {
     if (micBtn.classList.contains("live")) { await window.jarvis.audioStop(); micBtn.classList.remove("live"); return; }
+    stopSpeaking(); // push-to-talk always cuts Jarvis off
     micBtn.classList.add("live");
     cap.textContent = "listening…";
     const r = await window.jarvis.audioStart({});

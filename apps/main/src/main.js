@@ -12,7 +12,8 @@ import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChai
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
-import { isVoiceMode, nextVoiceAction } from "./voice.js";
+import { isVoiceMode, nextVoiceAction, stripWake } from "./voice.js";
+import { speechFor, voiceGate, isHush } from "./speech.js";
 import { ensureFleetOrAsk, startCreate, answerCreate, pendingBootstraps } from "./bootstrap.js";
 import { parseExplicitAgent, resolveAgent, getFleetRegistry } from "./autoroute.js";
 import { projectDir, projectName, recentProjects, setProject, matchProjectCommand } from "./project.js";
@@ -54,6 +55,24 @@ async function answerPending(decision) {
   return { requestID, decision, r };
 }
 
+// Spoken replies (voice mode only). The deck does the text-to-speech and
+// reports when it is talking, so the voice loop can ignore Jarvis's own voice.
+let speakingNow = false;
+let speakingTailUntil = 0;
+const isSpeaking = () => speakingNow || Date.now() < speakingTailUntil;
+function setSpeaking(on) {
+  speakingNow = !!on;
+  if (!on) speakingTailUntil = Date.now() + 700;
+}
+function speak(win, text) {
+  const t = String(text ?? "").trim();
+  if (!t || !isVoiceMode(shellStore())) return;
+  win?.webContents.send("jarvis.speak", { text: t });
+}
+function hush(win) {
+  win?.webContents.send("jarvis.speak.stop", {});
+}
+
 // Voice loop: mic stays open while shell voiceMode is on. Wake-gated tasks feed
 // the same commitText as typed text; push-to-talk keeps working via suspend.
 let voiceRunning = false;
@@ -77,11 +96,20 @@ async function voiceLoop(commitText, win) {
         continue;
       }
       const s = shellStore().settings;
+      // While Jarvis talks the mic hears it too: drop that, but let an
+      // explicit "hey jarvis …" cut in (and "hey jarvis stop" just hushes).
+      const gate = voiceGate(fin.text, { speaking: isSpeaking(), wakeWord: s.wake });
+      if (gate === "drop") continue;
+      if (gate === "barge") {
+        hush(win);
+        if (isHush(stripWake(fin.text, s.wake))) continue;
+      }
       const next = nextVoiceAction(fin.text, { voiceMode: s.voiceMode, wakeWord: s.wake });
       if (next.action === "wake-task") {
         const utterance = toUtterance(fin);
         win?.webContents.send("caption.final", { id: utterance.id, text: utterance.text });
         try { await commitText(next.text); } catch (err) { console.error("voice commit failed:", err.message ?? err); }
+        finally { win?.webContents.send("utterance.settled", { id: utterance.id }); }
       } else if (next.action === "wake-empty") {
         win?.webContents.send("caption.partial", { id: fin.id, text: `heard ${s.wake} — say a command`, revision: 0 });
       }
@@ -250,8 +278,9 @@ async function reviewWorker(ev, broadcast) {
     kind: "worker.report",
     report: { sessionID: report.sessionID, agent: report.agent, round: report.round, status: report.status, headline: reportHeadline(report), files: report.files, branch: report.worktree?.branch ?? null },
   });
-  const r = await brainReview(report, say);
+  const r = await brainReview(report, say, { voice: isVoiceMode(shellStore()) });
   win?.webContents.send("session.done", { modelUsed: r.modelUsed, status: r.status });
+  if (r.status === "ok") speak(win, r.speak);
   for (const warn of r.warnings ?? []) say(`[review] ${warn}\n`);
   if (r.followup) {
     const f = await followUpWorker(report.sessionID, r.followup.task);
@@ -345,6 +374,7 @@ app.whenReady().then(async () => {
     if (proj) {
       const r = proj.error ? { ok: false, reason: proj.error } : await switchProject(proj.dir, broadcast);
       win?.webContents.send("session.stream", { delta: r.ok ? `[project] now working in ${r.name} (${r.dir})\n` : `[project] ${r.reason}\n` });
+      speak(win, r.ok ? `Now working in ${r.name}.` : `I don't know a recent project by that name.`);
       win?.webContents.send("session.done", { status: r.ok ? "ok" : "failed" });
       return { ok: r.ok, control: "project", ...r };
     }
@@ -354,6 +384,7 @@ app.whenReady().then(async () => {
         ? { land: `landed ${r.branch} into ${r.base}`, keep: `kept branch ${r.branch}; worktree removed`, discard: `discarded ${r.branch}` }[r.action]
         : `${routed.action} refused: ${r.reason}`;
       win?.webContents.send("session.stream", { delta: `[git] ${line}\n` });
+      speak(win, r.ok ? { land: "Landed.", keep: "Kept the branch.", discard: "Discarded." }[r.action] : `I couldn't ${routed.action} it. ${r.reason}`);
       win?.webContents.send("session.done", { status: r.ok ? "ok" : "failed" });
       return { ok: r.ok, control: "chain.action", ...r };
     }
@@ -370,13 +401,13 @@ app.whenReady().then(async () => {
       broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
       if (routed.name === "set.voiceMode") {
         if (routed.args?.value === "on") voiceLoop(commitText, win);
-        else stopListening();
+        else { stopListening(); hush(win); }
       }
       return { ok: true, control: "app.command", entry };
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }).catch(async (err) => {
+    }, { voice: isVoiceMode(shellStore()) }).catch(async (err) => {
       // Brain fallback: direct read-only turn if the graph path fails. Loud,
       // so a broken brain never hides behind a working fallback.
       console.error("brain failed, falling back to direct turn:", err?.message ?? err);
@@ -386,6 +417,8 @@ app.whenReady().then(async () => {
       }, files?.length ? { files } : {});
     });
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
+    if (r.status === "ok") speak(win, r.speak ?? speechFor(r.reply ?? r.text ?? ""));
+    else if (isVoiceMode(shellStore())) speak(win, "Sorry, that didn't work. The details are in the transcript.");
     const dispatched = [];
     for (const w of r.warnings ?? []) {
       win?.webContents.send("session.stream", { delta: `\n[act] ${w}\n` });
@@ -581,7 +614,17 @@ app.whenReady().then(async () => {
     }
     const entry = applyAppCommand(shellStore(), name, args);
     broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+    // The deck's voice button goes through here: it must start/stop the loop
+    // exactly like the spoken "voice mode on/off" does.
+    if (name === "set.voiceMode") {
+      if (args?.value === "on") voiceLoop(commitText, win);
+      else { stopListening(); hush(win); }
+    }
     return { ok: true, entry };
+  });
+  ipcMain.handle("tts.state", async (_e, { speaking } = {}) => {
+    setSpeaking(speaking);
+    return { ok: true };
   });
   ipcMain.handle("settings.get", async () => ({
     ok: true,
