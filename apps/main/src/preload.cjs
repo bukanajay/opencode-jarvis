@@ -60,4 +60,9 @@ contextBridge.exposeInMainWorld("jarvis", {
   worktreeCreate: (args) => ipcRenderer.invoke("worktree.create", args),
   worktreeRemove: (projectID, directory) => ipcRenderer.invoke("worktree.remove", { projectID, directory }),
   sessionCompact: (sessionID) => ipcRenderer.invoke("session.compact", { sessionID }),
+  bootstrapAnswer: (id, text) => ipcRenderer.invoke("bootstrap.answer", { id, text }),
+  bootstrapCancel: (id) => ipcRenderer.invoke("bootstrap.cancel", { id }),
+  onBootstrapAsk: (fn) => ipcRenderer.on("bootstrap.ask", (_e, payload) => fn(payload)),
+  onBootstrapDone: (fn) => ipcRenderer.on("bootstrap.done", (_e, payload) => fn(payload)),
+  onBootstrapCancelled: (fn) => ipcRenderer.on("bootstrap.cancelled", (_e, payload) => fn(payload)),
 });

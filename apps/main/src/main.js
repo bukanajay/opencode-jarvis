@@ -10,6 +10,13 @@ import { brainRespond } from "./brain/brain.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
+import { isVoiceMode, nextVoiceAction } from "./voice.js";
+import { ensureFleetOrAsk, startCreate, answerCreate, pendingBootstraps } from "./bootstrap.js";
+import { parseExplicitAgent, resolveAgent, getFleetRegistry } from "./autoroute.js";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const bootStash = new Map(); // bootID -> { task, directory, gate, conv?, ctx? }
+const latestBootstrap = () => [...bootStash.keys()].pop() ?? null;
 
 let shell = null;
 const shellStore = () => (shell ??= loadStore());
@@ -42,6 +49,87 @@ async function answerPending(decision) {
   const [requestID] = [...pendingPermissions.keys()];
   const r = await replyPermission(requestID, decision);
   return { requestID, decision, r };
+}
+
+// Voice loop: mic stays open while shell voiceMode is on. Wake-gated tasks feed
+// the same commitText as typed text; push-to-talk keeps working via suspend.
+let voiceRunning = false;
+let voiceSuspend = false;
+async function voiceLoop(commitText, win) {
+  if (voiceRunning) return;
+  voiceRunning = true;
+  try {
+    while (isVoiceMode(shellStore())) {
+      if (voiceSuspend || isListening()) { await sleep(500); continue; }
+      let fin;
+      try {
+        fin = await listenOnce({ onPartial: (p) => win?.webContents.send("caption.partial", p) });
+      } catch (err) {
+        win?.webContents.send("audio.error", { message: String(err.message ?? err) });
+        await sleep(1500);
+        continue;
+      }
+      const s = shellStore().settings;
+      const next = nextVoiceAction(fin.text, { voiceMode: s.voiceMode, wakeWord: s.wake });
+      if (next.action === "wake-task") {
+        const utterance = toUtterance(fin);
+        win?.webContents.send("caption.final", { id: utterance.id, text: utterance.text });
+        try { await commitText(next.text); } catch (err) { console.error("voice commit failed:", err.message ?? err); }
+      } else if (next.action === "wake-empty") {
+        win?.webContents.send("caption.partial", { id: fin.id, text: `heard ${s.wake} — say a command`, revision: 0 });
+      }
+    }
+  } finally {
+    voiceRunning = false;
+  }
+}
+
+async function buildBootstrapCtx(directory) {
+  const { client } = await ensureClient();
+  const list = await client.model.list();
+  const rows = list.models ?? list.data ?? [];
+  const arr = Array.isArray(rows) ? rows : [];
+  const providers = [...new Set(arr.map((m) => m.providerID).filter(Boolean))];
+  const modelsByProvider = {};
+  for (const m of arr) {
+    if (!m.providerID) continue;
+    (modelsByProvider[m.providerID] ??= []).push(m.modelID ?? m.id);
+  }
+  return { client, directory, providers, modelsByProvider };
+}
+
+async function answerBootstrapText(id, text, win, broadcast) {
+  const entry = bootStash.get(id);
+  if (!entry) throw new Error(`no pending bootstrap: ${id}`);
+  const low = String(text ?? "").trim().toLowerCase();
+  if (entry.gate) {
+    if (/^(yes|y|create|do it)$/.test(low)) {
+      const conv = startCreate([]);
+      entry.gate = false;
+      entry.conv = conv;
+      broadcast({ kind: "bootstrap.ask", id, stage: conv.stage, prompt: conv.prompt });
+      return { id, stage: conv.stage, prompt: conv.prompt };
+    }
+    bootStash.delete(id);
+    broadcast({ kind: "bootstrap.cancelled", id });
+    return { id, stage: "cancelled" };
+  }
+  entry.ctx ??= await buildBootstrapCtx(entry.directory);
+  const r = await answerCreate(entry.conv, text, entry.ctx);
+  if (r.stage === "done") {
+    bootStash.delete(id);
+    const spawned = await spawnWorker(entry.task, { agent: r.name, directory: entry.directory });
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    broadcast({ kind: "bootstrap.done", id, name: r.name, note: r.note, sessionID: spawned.sessionID });
+    return { id, stage: "done", name: r.name, sessionID: spawned.sessionID };
+  }
+  if (r.stage === "cancelled") {
+    bootStash.delete(id);
+    broadcast({ kind: "bootstrap.cancelled", id });
+    return { id, stage: "cancelled" };
+  }
+  broadcast({ kind: "bootstrap.ask", id, stage: r.stage, prompt: r.prompt, options: r.options, spec: r.spec });
+  return { id, stage: r.stage };
 }
 
 function matchPendingForm(text) {
@@ -125,6 +213,11 @@ app.whenReady().then(async () => {
       broadcast({ kind: "config.pending", pending: publicPending(staged) });
       return { ok: true, control: "config.stage", pendingID: staged.pendingID };
     }
+    const bootID = latestBootstrap();
+    if (bootID) {
+      const r = await answerBootstrapText(bootID, text, win, broadcast);
+      return { ok: true, control: "bootstrap", ...r };
+    }
     if (routed.route === "stop-worker") {
       const w = latestActiveWorker();
       if (!w) return { ok: false, control: "stop-worker", reason: "no active worker" };
@@ -136,6 +229,10 @@ app.whenReady().then(async () => {
       // Shell bucket: applied next frame, persisted, no model call.
       const entry = applyAppCommand(shellStore(), routed.name, routed.args);
       broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+      if (routed.name === "set.voiceMode") {
+        if (routed.args?.value === "on") voiceLoop(commitText, win);
+        else stopListening();
+      }
       return { ok: true, control: "app.command", entry };
     }
     const r = await brainRespond(text, (d) => {
@@ -174,6 +271,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("audio.start", async (_e, { simulate, engine } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };
+    voiceSuspend = true;
     const partials = [];
     try {
       const fin = await listenOnce({
@@ -192,17 +290,50 @@ app.whenReady().then(async () => {
     } catch (err) {
       win?.webContents.send("audio.error", { message: String(err.message ?? err) });
       return { ok: false, reason: String(err.message ?? err) };
+    } finally {
+      voiceSuspend = false;
     }
   });
   ipcMain.handle("audio.stop", async () => {
+    voiceSuspend = false;
     stopListening();
     return { ok: true };
   });
   ipcMain.handle("fleet.spawn", async (_e, { task, agent, directory } = {}) => {
     if (!task || typeof task !== "string") throw new Error("fleet.spawn: task required");
-    const r = await spawnWorker(task, { agent, directory });
+    const dir = directory ?? process.cwd();
+    const { client } = await ensureClient();
+    const said = parseExplicitAgent(task);
+    const cleanTask = said?.task ?? task;
+    const settings = shellStore().settings;
+    const registry = await getFleetRegistry(client, dir);
+    const r = resolveAgent(cleanTask, {
+      explicit: said, defaultAgent: settings.defaultAgent ?? "build", autoMode: settings.autoMode, registry,
+    });
+    if (r.error) return { ok: false, reason: r.error };
+    if (!agent && !said) {
+      const gate = await ensureFleetOrAsk(client, dir);
+      if (gate.state === "empty") {
+        const id = `boot_${Date.now().toString(36)}`;
+        bootStash.set(id, { task: cleanTask, directory: dir, gate: true });
+        broadcast({ kind: "bootstrap.ask", id, stage: "gate", prompt: gate.prompt, options: ["yes", "no"] });
+        return { ok: true, needBootstrap: true, id };
+      }
+    }
+    const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir });
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    return { ok: true, ...res, agent: agent ?? r.agent, reason: r.reason ?? `default->${agent ?? r.agent}` };
+  });
+  ipcMain.handle("bootstrap.answer", async (_e, { id, text } = {}) => {
+    if (!id || typeof text !== "string") throw new Error("bootstrap.answer: id + text required");
+    const r = await answerBootstrapText(id, text, win, broadcast);
     return { ok: true, ...r };
+  });
+  ipcMain.handle("bootstrap.cancel", async (_e, { id } = {}) => {
+    if (!id) throw new Error("bootstrap.cancel: id required");
+    bootStash.delete(id);
+    broadcast({ kind: "bootstrap.cancelled", id });
+    return { ok: true };
   });
   ipcMain.handle("fleet.list", async () => ({ ok: true, workers: snapshot() }));
   ipcMain.handle("fleet.stop", async (_e, { sessionID } = {}) => {
@@ -315,6 +446,7 @@ app.whenReady().then(async () => {
     return { ok: true, forms: await refreshForms(sessionID) };
   });
   await createWindow();
+  if (isVoiceMode(shellStore())) voiceLoop(commitText, win);
 });
 
 app.on("window-all-closed", () => {

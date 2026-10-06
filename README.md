@@ -176,3 +176,26 @@ Next: Step 2 Voice (SpeechAnalyzer helper -> same `Utterance` type).
 * Pending (tracked in ROADMAP.md, not forgotten): voice-mode toggle + `hey jarvis`
   wake, fleet bootstrap (empty-fleet reply, provider/model/effort create flow),
   default agent + auto mode.
+
+## Voice, bootstrap, auto (done 2026-10-06, three parallel slices + integration)
+
+`prove-voice-mode` (18 checks), `prove-bootstrap`, `prove-autoroute`,
+`prove-integration` -> all green.
+
+* Voice (`apps/main/src/voice.js`): pure wake gate — `hey/ok jarvis` detected and
+  stripped, off-mode blocks everything, stripped text reuses `commitText` so
+  `hey jarvis, dim the fleet` applies with no model. Main runs the mic loop only
+  while `set.voiceMode on`; push-to-talk suspends it via `isListening` guard.
+  Deck has a Voice toggle next to Mic.
+* Bootstrap (`apps/main/src/bootstrap.js`): `fleet.spawn` with no agent on an
+  empty fleet opens a staged gate (purpose → provider → model → effort →
+  confirm showing the exact spec) instead of spawning. Confirm writes the agent
+  file, verifies via `agent.get`, then resumes the stashed task on the new agent.
+  Deck blocking card with option chips.
+* Auto (`apps/main/src/autoroute.js`): `@id`/`ask id to`/`using id` explicit forms
+  validated against registry + builtins; auto on picks by keyword overlap with
+  visible reason (`review->reviewer (3 hits)`), ties/empty fall back to
+  `set.defaultAgent` (default `build`). Deck agent select preselects the default.
+* Kept decisions: new-agent permissions default allow (flagged narrower later);
+  `@build` stays valid explicit; bootstrap `yes` loses ties to permission/config
+  confirms by existing route order.

@@ -169,6 +169,7 @@
   <div id="perm-slot"></div>
   <div id="cfg-slot"></div>
   <div id="frm-slot"></div>
+  <div id="boot-slot"></div>
 
   <section id="work">
     <h2>Work view</h2>
@@ -194,6 +195,7 @@
       <input id="q" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" spellcheck="false" />
       <button type="submit">Send</button>
       <button type="button" class="ghost" id="mic">Mic</button>
+      <button type="button" class="ghost" id="voice">Voice: off</button>
     </form>
     <form id="fa" style="margin-top:8px;">
       <input id="attach" placeholder="attach path (optional)" />
@@ -569,9 +571,26 @@
     if (!r?.ok) return;
     ACC = r.accents ?? ACC;
     paintSettings(r.settings);
+    paintVoice(r.settings);
+    if (r.settings.defaultAgent) defaultAgent = r.settings.defaultAgent;
     const el = auditEl();
     if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
   });
+  let defaultAgent = "build";
+  function paintVoice(s) {
+    const b = $("voice");
+    if (b) b.textContent = `Voice: ${s.voiceMode === "on" ? "on" : "off"}`;
+  }
+  window.jarvis?.onSettings(({ entry, settings }) => {
+    if (entry.what.startsWith("set.voiceMode") || entry.what.startsWith("set.autoMode") || entry.what.startsWith("set.defaultAgent")) {
+      if (settings.defaultAgent) defaultAgent = settings.defaultAgent;
+      paintVoice(settings);
+    }
+  });
+  $("voice").onclick = async () => {
+    const cur = $("voice").textContent.includes("on");
+    await window.jarvis.appCommand("set.voiceMode", { value: cur ? "off" : "on" });
+  };
 
   window.jarvis?.onConfigPending(({ pending }) => {
     sndPermission();
@@ -598,6 +617,29 @@
   window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
   $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
   $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
+  // Bootstrap: empty fleet -> staged Q&A on a blocking card. Option chips answer,
+  // free text goes through the composer (commitText routes while one is pending).
+  window.jarvis?.onBootstrapAsk(({ id, stage, prompt, options, spec }) => {
+    sndPermission();
+    const buttons = (options ?? []).slice(0, 8).map((o) => [
+      String(o), o === "no" ? "ghost" : "", async () => { await window.jarvis.bootstrapAnswer(id, String(o)); },
+    ]);
+    if ((options ?? []).length === 0) {
+      buttons.push(["Discard", "ghost", async () => { await window.jarvis.bootstrapCancel(id); unmountCard("boot"); }]);
+    }
+    mountCard("boot", {
+      title: stage === "gate" ? "No agent yet" : `New agent — ${stage}`,
+      body: prompt,
+      rule: spec ? JSON.stringify(spec) : "",
+      amber: true,
+      buttons,
+    });
+  });
+  window.jarvis?.onBootstrapDone(({ name, note, sessionID }) => {
+    unmountCard("boot"); sndDone();
+    log.textContent += `\n[agent] ${note}\n[worker ${String(sessionID).slice(0, 8)} on ${name}]\n`;
+  });
+  window.jarvis?.onBootstrapCancelled(() => { unmountCard("boot"); log.textContent += "\n[agent] bootstrap discarded\n"; });
 
   window.jarvis?.onFormWaiting(({ sessionID, forms }) => {
     sndPermission();
@@ -664,6 +706,7 @@
         o.value = o.textContent = id;
         sel.appendChild(o);
       });
+      if ([...sel.options].some((o) => o.value === defaultAgent)) sel.value = defaultAgent;
     } catch {}
     try {
       const m = await window.jarvis.modelList();
@@ -689,9 +732,16 @@
   $("spawn").onclick = async () => {
     const task = prompt("Worker task:", "Run `ls` and report the first 3 entries. Do not edit files.");
     if (!task) return;
-    await window.jarvis.fleetSpawn(task);
+    const r = await window.jarvis.fleetSpawn(task);
+    spawnNote(r);
     window.jarvis.fleetList().then((r) => renderRing(r.workers));
   };
+  function spawnNote(r) {
+    if (!r) return;
+    if (r.needBootstrap) log.textContent += "\n[no agent yet — answer on the card]\n";
+    else if (!r.ok) log.textContent += `\n[fault] ${r.reason ?? "spawn failed"}\n`;
+    else if (r.reason) log.textContent += `\n[${r.reason} → ${r.agent}]\n`;
+  }
   $("stop").onclick = async () => { await window.jarvis.fleetStop(); };
   $("work-stop").onclick = async () => { if (selected) await window.jarvis.fleetStop(selected); };
   $("work-rename").onclick = async () => {
@@ -723,7 +773,7 @@
     $("q").value = "";
     log.textContent += "\n> " + text + "\n";
     const m = text.match(/^launch worker:\s*(.+)/i);
-    if (m) { await window.jarvis.fleetSpawn(m[1]); return; }
+    if (m) { spawnNote(await window.jarvis.fleetSpawn(m[1])); return; }
     const files = [];
     const ap = $("attach").value.trim();
     if (ap) files.push({ uri: ap.startsWith("file://") ? ap : "file://" + ap, name: ap.split("/").pop() });
@@ -803,7 +853,7 @@
     const dir = $("proj-dir").value.trim() || undefined;
     const task = prompt("Worker task:", "Reply with exactly: proj-ok. No tools.");
     if (!task) return;
-    await window.jarvis.fleetSpawn(task, dir);
+    spawnNote(await window.jarvis.fleetSpawn(task, dir));
   });
   $("wt-list").onclick = async () => {
     try {

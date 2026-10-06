@@ -8,11 +8,11 @@ LangGraph loop in Main, OpenCode session as the reasoner (Luna default, switchab
 via OpenCode model list, no new keys). Local long-term memory.
 
 - [x] Brain core: recall → think → respond → persist, memory store, brain model switch
-- [ ] Voice mode toggle (shell `set.voiceMode on|off`): off = type + read; on = keep
+- [x] Voice mode toggle (shell `set.voiceMode on|off`): off = type + read; on = keep
   listening, `hey jarvis` wake detection, hands-free dispatch through the same graph
-- [ ] Fleet bootstrap: empty fleet replies "no agent", asks to create; yes → ask
+- [x] Fleet bootstrap: empty fleet replies "no agent", asks to create; yes → ask
   provider → model → effort; creates the agent; repeatable for N agents
-- [ ] Default agent + auto mode (shell `set.defaultAgent`, `set.autoMode on|off`):
+- [x] Default agent + auto mode (shell `set.defaultAgent`, `set.autoMode on|off`):
   no agent named → default; auto on → Jarvis picks from task text + fleet registry
 
 Pending details to lock when each slice starts: wake-word engine (transcript match
