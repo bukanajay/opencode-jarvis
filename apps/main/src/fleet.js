@@ -32,6 +32,7 @@ function workerEvent(sessionID) {
   return {
     id: sessionID,
     task: w.task,
+    agent: w.agent ?? "build",
     state: w.state,
     toolCount: w.tools.length,
     pending: w.pending ? { requestID: w.pending.requestID, action: w.pending.action, resources: w.pending.resources } : null,
@@ -305,15 +306,17 @@ export async function spawnWorker(task, opts = {}) {
   const parentID = await ensureJarvisSession(process.cwd());
   const model = opts.model ?? resolveWorkerModel();
   const directory = opts.directory ?? process.cwd();
+  const agent = opts.agent ?? "build";
   const session = await client.session.create({
     parentID,
-    agent: opts.agent ?? "build",
+    agent,
     model,
     location: { directory },
     title: task.slice(0, 64),
   });
   const w = record(session.id);
   w.task = task;
+  w.agent = agent;
   w.model = model;
   w.state = "idle";
   await ensureFleetPump(opts.onEvent);

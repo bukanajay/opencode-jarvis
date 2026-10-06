@@ -3,113 +3,189 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Jarvis Deck — Fleet</title>
+<title>Jarvis Deck</title>
 <style>
-  :root { --bg:#060809; --ink:#e8f0ee; --dim:#5c6e6a; --line:#1d2a28; --accent:#c8f04a; }
+  :root {
+    --bg: #05080a;
+    --panel: #0a0f12;
+    --panel2: #0c1317;
+    --line: #1c2a26;
+    --ink: #e9f2ec;
+    --dim: #64776f;
+    --accent: #c8f04a;
+    --danger: #ff5d5d;
+    --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --cap: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
   * { box-sizing: border-box; }
-  body { background:var(--bg); color:var(--ink); font-family: system-ui, sans-serif; margin:0; }
-  main { max-width: 960px; margin: 24px auto; padding: 0 20px; display:grid; gap:16px; }
-  section { border:1px solid var(--line); padding:12px; }
-  h2 { font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:0 0 8px; font-family: ui-monospace, monospace; }
-  /* Ring: center Jarvis, workers on a ring. Permission breaks toward center. */
-  #ring { position:relative; height:300px; }
-  .node { position:absolute; transform:translate(-50%,-50%); border:1px solid var(--line); padding:10px 14px; background:#0b1110; transition: all 160ms ease; max-width:220px; }
-  .node .st { display:block; font-size:11px; color:var(--dim); font-family:ui-monospace, monospace; }
-  #jarvis-node { left:50%; top:50%; border-color:var(--accent); }
-  .worker.idle { opacity:.55; }
-  .worker.working { opacity:1; border-color:var(--accent); box-shadow:0 0 18px rgba(200,240,74,.25); }
-  .worker.permission { opacity:1; border-color:#ff5d5d; left:50% !important; top:50% !important; transform:translate(-50%,-50%) scale(1.08); box-shadow:0 0 24px rgba(255,93,93,.4); }
-  .worker.done { opacity:.4; }
-  /* Permission card: not a toast. Blocks the turn until answered. */
-  #perm { display:none; border-color:#ff5d5d; }
-  #perm.show { display:block; }
-  #perm .res { font-family:ui-monospace, monospace; font-size:12px; }
-  .res { font-family:ui-monospace, monospace; font-size:12px; color:var(--dim); }
-  #perm button { margin-right:8px; }
-  button { padding:8px 14px; background:var(--accent); border:0; font-weight:700; cursor:pointer; }
-  button.ghost { background:#14201e; color:var(--accent); border:1px solid var(--accent); }
-  button.danger { background:#ff5d5d; color:#060809; }
-  #log { white-space: pre-wrap; min-height:120px; max-height:260px; overflow:auto; }
-  #work { display:none; }
-  #work.show { display:block; }
-  #work .tools { font-family:ui-monospace, monospace; font-size:12px; color:var(--dim); }
-  form { display:flex; gap:8px; }
-  input { flex:1; padding:10px; background:#0b1110; color:var(--ink); border:1px solid var(--line); }
-  #caption { min-height:22px; font-size:14px; opacity:.85; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #0b1410 0%, var(--bg) 55%) fixed, var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  body[data-density="compact"] { font-size: 13px; }
+  body[data-density="compact"] section { padding: 8px 10px; }
+  header {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 14px 22px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 {
+    font-size: 17px; font-weight: 650; letter-spacing: 0.28em; margin: 0;
+  }
+  header h1 .dot { color: var(--accent); }
+  header .tele {
+    font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  header .tele b { color: var(--ink); font-weight: 600; }
+  main {
+    max-width: 1060px; margin: 0 auto; padding: 16px 20px 60px;
+    display: grid; gap: 14px;
+  }
+  body[data-layout="wide"] main { max-width: 1340px; }
+  section {
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  h2 {
+    font-family: var(--cap); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 10px;
+  }
+  h2 .live { color: var(--accent); }
+  .deck { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
+  @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
+  #ring-wrap { position: relative; }
+  #ring { width: 100%; height: 340px; display: block; border-radius: 8px; cursor: pointer; }
+  #ring-legend {
+    display: flex; gap: 14px; margin-top: 8px;
+    font-family: var(--cap); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  #ring-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  #log {
+    white-space: pre-wrap; word-break: break-word;
+    min-height: 200px; max-height: 340px; overflow: auto;
+    font-size: 13.5px;
+  }
+  #log .sys { color: var(--dim); font-family: var(--cap); font-size: 11px; }
+  #work { display: none; }
+  #work.show { display: block; }
+  #work-task { font-weight: 600; margin-bottom: 6px; }
+  #work-log { white-space: pre-wrap; max-height: 220px; overflow: auto; }
+  .tools { font-family: var(--cap); font-size: 11.5px; color: var(--dim); white-space: pre-wrap; }
+  .card {
+    border: 1px solid var(--danger); border-radius: 10px;
+    background: #140b0c; padding: 14px 16px;
+    box-shadow: 0 0 34px rgba(255, 93, 93, 0.16);
+    animation: cardin 180ms ease;
+  }
+  .card.amber { border-color: var(--accent); background: #0e1206; box-shadow: 0 0 34px rgba(200, 240, 74, 0.12); }
+  @keyframes cardin { from { transform: translateY(6px); opacity: 0.2; } to { transform: none; opacity: 1; } }
+  .card h2 { color: var(--ink); }
+  .res { font-family: var(--cap); font-size: 11.5px; color: var(--dim); }
+  .card .res { color: #c9a3a3; }
+  .card.amber .res { color: #b9c48d; }
+  form { display: flex; gap: 8px; }
+  input, select {
+    flex: 1; padding: 10px 12px; background: #070c0e; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; font: inherit;
+  }
+  input:focus, select:focus, button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  select { flex: 0 1 auto; }
+  button {
+    padding: 10px 16px; background: var(--accent); color: #0a0d05;
+    border: 0; border-radius: 8px; font-weight: 700; cursor: pointer;
+    transition: filter 150ms ease, transform 150ms ease;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button.danger { background: var(--danger); color: #160808; }
+  #mic.live { background: var(--accent); color: #0a0d05; box-shadow: 0 0 18px rgba(200, 240, 74, 0.45); }
+  #mic { min-width: 76px; }
+  #caption { min-height: 24px; font-size: 14px; color: var(--ink); opacity: 0.9; }
+  #caption:empty::before { content: "captions always on — speak or type"; color: var(--dim); font-size: 12.5px; }
+  details { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  details > summary {
+    cursor: pointer; padding: 12px 14px; list-style: none;
+    font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "▸ "; color: var(--accent); }
+  details[open] > summary::before { content: "▾ "; }
+  details > .body { padding: 0 14px 14px; display: grid; gap: 10px; }
+  pre.term {
+    background: #04070a; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; max-height: 220px; overflow: auto;
+    font-family: var(--cap); font-size: 12px; white-space: pre-wrap; margin: 0;
+  }
+  #audit { min-height: 44px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 </style>
 </head>
 <body>
+<header>
+  <h1>JARVIS<span class="dot">.</span></h1>
+  <span class="tele">primary <b>jarvis</b></span>
+  <span class="tele">model <b id="h-model">luna*</b></span>
+  <span class="tele" id="h-state">idle</span>
+</header>
 <main>
-  <section>
-    <h2>Fleet</h2>
-    <div id="ring"><div class="node" id="jarvis-node">Jarvis<span class="st">primary · luna*</span></div></div>
-    <div>
-      <button class="ghost" id="spawn">Launch worker</button>
-      <button class="ghost" id="stop">Stop latest</button>
-    </div>
-  </section>
-  <section id="perm">
-    <h2>Permission waiting</h2>
-    <div id="perm-text"></div>
-    <div class="res" id="perm-res"></div>
-    <p><button id="allow">Allow once</button><button class="danger" id="deny">Deny</button>
-    <span class="res">voice: say “allow” or “deny”</span></p>
-  </section>
-  <section id="cfg" style="display:none;border-color:var(--accent);">
-    <h2>Config change — confirm</h2>
-    <div id="cfg-text"></div>
-    <div class="res" id="cfg-rule"></div>
-    <p><button id="cfg-yes">Yes, apply it</button><button class="ghost" id="cfg-no">Discard</button>
-    <span class="res">voice: say “yes, apply it” or “no”</span></p>
-  </section>
-  <section id="frm" style="display:none;border-color:var(--accent);">
-    <h2>Question — answer to continue</h2>
-    <div id="frm-title"></div>
-    <div id="frm-fields" class="res"></div>
-    <p><span class="res">voice: say the option, or answer by hand</span></p>
-  </section>
+  <div class="deck">
+    <section>
+      <h2>Fleet <span class="live" id="fleet-count"></span></h2>
+      <div id="ring-wrap"><canvas id="ring"></canvas></div>
+      <div id="ring-legend">
+        <span><i style="background:var(--accent)"></i>working</span>
+        <span><i style="background:#3a4a45"></i>idle</span>
+        <span><i style="background:var(--danger)"></i>permission</span>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button class="ghost" id="spawn">Launch worker</button>
+        <button class="ghost" id="stop">Stop latest</button>
+      </div>
+    </section>
+    <section>
+      <h2>Transcript</h2>
+      <div id="log" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <div id="perm-slot"></div>
+  <div id="cfg-slot"></div>
+  <div id="frm-slot"></div>
+
   <section id="work">
     <h2>Work view</h2>
     <div id="work-task"></div>
     <div class="tools" id="work-tools"></div>
     <div id="work-log"></div>
-    <p><label class="res">agent <select id="work-agent"></select></label>
+    <p class="row"><label class="res">agent <select id="work-agent"></select></label>
     <label class="res">model <select id="work-model"></select></label></p>
-    <p><button class="ghost" id="work-stop">Stop this worker</button>
+    <p class="row"><button class="ghost" id="work-stop">Stop</button>
     <button class="ghost" id="work-rename">Rename</button>
     <button class="ghost" id="work-fork">Fork</button>
     <button class="ghost" id="work-diff">Diff</button>
     <button class="ghost" id="work-undo">Undo last</button>
     <button class="ghost" id="work-compact">Compact</button>
-    <button class="ghost" id="work-back">Back to deck</button></p>
+    <button class="ghost" id="work-back">Back</button></p>
     <div class="tools" id="work-diff"></div>
   </section>
-  <section id="yard" style="display:none;">
-    <h2>Yard — terminal</h2>
-    <pre id="term-out" class="res" style="white-space:pre-wrap;max-height:220px;overflow:auto;min-height:60px;"></pre>
-    <form id="term-f">
-      <input id="term-cmd" placeholder="shell command" />
-      <button type="submit">Run</button>
-      <button type="button" class="ghost" id="term-kill">Kill</button>
-    </form>
-    <form id="proj-f" style="margin-top:8px;">
-      <input id="proj-dir" placeholder="project directory (empty = here)" />
-      <button class="ghost" type="submit">Spawn here</button>
-      <button class="ghost" type="button" id="wt-list">Worktrees</button>
-    </form>
-    <div class="res" id="wt-out"></div>
-  </section>
-  <p><button class="ghost" id="yard-toggle">Open yard</button></p>
-  <section id="mcp">
-    <h2>MCP</h2>
-    <div class="res" id="mcp-list"></div>
-    <p><button class="ghost" id="mcp-refresh">Refresh</button></p>
-  </section>
+
   <section>
     <h2>Composer</h2>
     <div id="caption" aria-live="polite"></div>
     <form id="f">
-      <input id="q" placeholder="Type, or Mic, or 'launch worker: …'" list="cmds" />
+      <input id="q" list="cmds" placeholder="Type, speak, launch worker: …, /command, @skill" autocomplete="off" />
       <button type="submit">Send</button>
       <button type="button" class="ghost" id="mic">Mic</button>
     </form>
@@ -118,46 +194,222 @@
       <button class="ghost" type="submit">Attach</button>
     </form>
     <datalist id="cmds"></datalist>
-    <div id="log" aria-live="polite"></div>
   </section>
+
+  <details id="yard-details">
+    <summary>Yard — files, git, terminal</summary>
+    <div class="body" id="yard">
+      <pre class="term" id="term-out"></pre>
+      <form id="term-f">
+        <input id="term-cmd" placeholder="shell command" />
+        <button type="submit">Run</button>
+        <button type="button" class="ghost" id="term-kill">Kill</button>
+      </form>
+      <form id="proj-f">
+        <input id="proj-dir" placeholder="project directory (empty = here)" />
+        <button class="ghost" type="submit">Spawn here</button>
+        <button class="ghost" type="button" id="wt-list">Worktrees</button>
+      </form>
+      <div class="res" id="wt-out"></div>
+    </div>
+  </details>
+  <p class="row"><button class="ghost" id="yard-toggle">Open yard</button></p>
+
+  <section id="mcp">
+    <h2>MCP</h2>
+    <div class="res" id="mcp-list"></div>
+    <p class="row"><button class="ghost" id="mcp-refresh">Refresh</button></p>
+  </section>
+
   <section>
     <h2>Settings — audit log</h2>
-    <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px;min-height:44px;"></div>
+    <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;min-height:44px;"></div>
     <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
+  </section>
+
+  <!-- compat anchors kept for wiring -->
+  <section id="perm" style="display:none" aria-hidden="true">
+    <h2>Permission waiting</h2>
+    <div id="perm-text"></div>
+    <div class="res" id="perm-res"></div>
+    <p class="row"><button id="allow">Allow once</button><button class="danger" id="deny">Deny</button></p>
+  </section>
+  <section id="cfg" style="display:none" aria-hidden="true">
+    <h2>Config change — confirm</h2>
+    <div id="cfg-text"></div>
+    <div class="res" id="cfg-rule"></div>
+    <p class="row"><button id="cfg-yes">Yes, apply it</button><button class="ghost" id="cfg-no">Discard</button></p>
+  </section>
+  <section id="frm" style="display:none" aria-hidden="true">
+    <h2>Question — answer to continue</h2>
+    <div id="frm-title"></div>
+    <div id="frm-fields" class="res"></div>
   </section>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
   const ring = $("ring"), log = $("log"), cap = $("caption");
+  const ACCENT_FALLBACK = "#c8f04a";
   let workers = [], selected = null, transcripts = {}, traces = {};
+  let agentColors = { build: ACCENT_FALLBACK, plan: "#7dd3fc", reviewer: "#ff9f5d" };
+
   // Three sounds only: permission, done, fault.
   let AC = null;
   const tone = (freq, t0, dur) => {
-    AC = AC ?? new (window.AudioContext || window.webkitAudioContext)();
-    const o = AC.createOscillator(), g = AC.createGain();
-    o.frequency.value = freq; o.connect(g); g.connect(AC.destination);
-    g.gain.setValueAtTime(0.12, AC.currentTime + t0);
-    g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + t0 + dur);
-    o.start(AC.currentTime + t0); o.stop(AC.currentTime + t0 + dur);
+    try {
+      AC = AC ?? new (window.AudioContext || window.webkitAudioContext)();
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(AC.destination);
+      g.gain.setValueAtTime(0.12, AC.currentTime + t0);
+      g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + t0 + dur);
+      o.start(AC.currentTime + t0); o.stop(AC.currentTime + t0 + dur);
+    } catch {}
   };
-  const sndPermission = () => { tone(880, 0, .18); tone(660, .18, .25); };
-  const sndDone = () => tone(660, 0, .15);
-  const sndFault = () => tone(180, 0, .3);
+  const sndPermission = () => { tone(880, 0, 0.18); tone(660, 0.18, 0.25); };
+  const sndDone = () => tone(660, 0, 0.15);
+  const sndFault = () => tone(180, 0, 0.3);
+
+  const accent = () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || ACCENT_FALLBACK;
+  const colorFor = (w) => agentColors[w.agent ?? "build"] ?? "#9fb3ac";
+
+  // Fleet canvas: transcripts stay in the DOM, canvas is only the fleet.
+  const ctx = ring.getContext("2d");
+  const nodes = new Map(); // id -> {x, y, tx, ty}
+  let pulse = 0, rafOn = false, lastDraw = 0;
+  function sizeCanvas() {
+    const r = ring.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    ring.width = Math.max(1, Math.round(r.width * dpr));
+    ring.height = Math.round(340 * dpr);
+  }
+  function layoutTargets() {
+    const W = ring.width, H = ring.height;
+    const cx = W / 2, cy = H / 2, rx = W * 0.36, ry = H * 0.34;
+    workers.forEach((w, i) => {
+      let n = nodes.get(w.id);
+      if (!n) { n = { x: cx, y: cy, tx: cx, ty: cy }; nodes.set(w.id, n); }
+      if (w.state === "permission" || w.pending) { n.tx = cx; n.ty = cy; return; }
+      const a = (2 * Math.PI * i) / Math.max(workers.length, 1) - Math.PI / 2;
+      n.tx = cx + rx * Math.cos(a);
+      n.ty = cy + ry * Math.sin(a);
+    });
+    for (const id of [...nodes.keys()]) {
+      if (id !== "__jarvis" && !workers.some((w) => w.id === id)) nodes.delete(id);
+    }
+  }
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+  function draw(now) {
+    rafOn = false;
+    const W = ring.width, H = ring.height, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const t = now / 1000;
+    let moving = false;
+    ctx.clearRect(0, 0, W, H);
+    // field grid, faint
+    ctx.strokeStyle = "rgba(120,150,140,0.07)";
+    ctx.lineWidth = 1;
+    const step = 34 * dpr;
+    ctx.beginPath();
+    for (let x = step / 2; x < W; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = step / 2; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+    // orbit
+    ctx.strokeStyle = "rgba(120,150,140,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(W / 2, H / 2, W * 0.36, H * 0.34, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // jarvis center
+    const j = nodes.get("__jarvis") ?? { x: W / 2, y: H / 2, tx: W / 2, ty: H / 2 };
+    nodes.set("__jarvis", j);
+    const jr = 30 * dpr;
+    const jg = ctx.createRadialGradient(j.x, j.y, 4, j.x, j.y, jr * 2.2);
+    jg.addColorStop(0, "rgba(200,240,74,0.20)");
+    jg.addColorStop(1, "rgba(200,240,74,0)");
+    ctx.fillStyle = jg;
+    ctx.beginPath(); ctx.arc(j.x, j.y, jr * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = accent();
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.arc(j.x, j.y, jr, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "#e9f2ec";
+    ctx.font = `${600 * dpr / 2}px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("J", j.x, j.y + dpr);
+    ctx.fillStyle = "rgba(160,180,170,0.9)";
+    ctx.font = `${10 * dpr / 2}px ui-monospace, monospace`;
+    ctx.fillText("JARVIS", j.x, j.y + jr + 12 * dpr / 2);
+    // workers
+    const fs = (11 * dpr) / 2, cs = (9.5 * dpr) / 2;
+    for (const w of workers) {
+      const n = nodes.get(w.id);
+      if (!n) continue;
+      const k = 1 - Math.pow(0.001, 1 / 60); // ~150ms ease
+      n.x += (n.tx - n.x) * k;
+      n.y += (n.ty - n.y) * k;
+      if (Math.abs(n.tx - n.x) + Math.abs(n.ty - n.y) > 0.6) moving = true;
+      const hot = w.state === "permission" || !!w.pending;
+      const active = w.state === "working";
+      const col = hot ? "#ff5d5d" : colorFor(w);
+      const R = (hot ? 26 : 20) * dpr / 2 + (hot ? Math.sin(t * 6) * 2 * dpr / 2 : 0);
+      if (active || hot) {
+        const g = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, R * 3);
+        g.addColorStop(0, hot ? "rgba(255,93,93,0.30)" : "rgba(200,240,74,0.18)");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(n.x, n.y, R * 3, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = w.state === "idle" || w.state === "done" ? 0.55 : 1;
+      ctx.fillStyle = "#0b1110";
+      ctx.strokeStyle = col;
+      ctx.lineWidth = (hot ? 2.4 : 1.6) * dpr / 2;
+      ctx.beginPath(); ctx.arc(n.x, n.y, R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.font = `${fs}px ${getComputedStyle(document.body).fontFamily}`;
+      const label = (w.task || w.id.slice(0, 8)).slice(0, 22);
+      ctx.fillText(label, n.x, n.y - R - 10 * dpr / 2);
+      ctx.fillStyle = hot ? "#ff8d8d" : "rgba(150,170,160,0.95)";
+      ctx.font = `${cs}px ui-monospace, monospace`;
+      ctx.fillText((hot ? "PERMISSION" : (w.state || "idle")).toUpperCase(), n.x, n.y + R + 11 * dpr / 2);
+      ctx.globalAlpha = 1;
+    }
+    pulse++;
+    if (moving || workers.some((w) => w.state === "permission" || w.pending || w.state === "working")) {
+      requestFrame();
+    }
+    lastDraw = now;
+  }
+  function requestFrame() {
+    if (!rafOn) { rafOn = true; requestAnimationFrame(draw); }
+  }
+  ring.addEventListener("click", (e) => {
+    const r = ring.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const x = (e.clientX - r.left) * dpr, y = (e.clientY - r.top) * dpr;
+    let best = null, bd = 34 * dpr;
+    for (const w of workers) {
+      const n = nodes.get(w.id);
+      if (!n) continue;
+      const d = Math.hypot(n.x - x, n.y - y);
+      if (d < bd) { bd = d; best = w.id; }
+    }
+    if (best) select(best);
+  });
+  window.addEventListener("resize", () => { sizeCanvas(); layoutTargets(); requestFrame(); });
 
   function renderRing(snap) {
     workers = snap ?? workers;
-    ring.querySelectorAll(".worker").forEach((n) => n.remove());
-    const cx = 50, cy = 50, rx = 38, ry = 36;
-    workers.forEach((w, i) => {
-      const a = (2 * Math.PI * i) / Math.max(workers.length, 1) - Math.PI / 2;
-      const n = document.createElement("div");
-      n.className = "node worker " + w.state;
-      n.style.left = (cx + rx * Math.cos(a)) + "%";
-      n.style.top = (cy + ry * Math.sin(a)) + "%";
-      n.innerHTML = `<b>${(w.task || w.id.slice(0, 8)).slice(0, 28)}</b><span class="st">${w.state}${w.pending ? " · permission" : ""}</span>`;
-      n.onclick = () => select(w.id);
-      ring.appendChild(n);
-    });
+    $("fleet-count").textContent = workers.length ? `${workers.length} active` : "";
+    const anyperm = workers.some((w) => w.state === "permission" || w.pending);
+    const anywork = workers.some((w) => w.state === "working");
+    $("h-state").textContent = anyperm ? "permission waiting" : anywork ? "working" : workers.length ? "idle" : "idle";
+    layoutTargets();
+    requestFrame();
   }
   function select(id) {
     selected = id;
@@ -167,6 +419,197 @@
     $("work-tools").textContent = (traces[id] ?? []).join("\n");
     fillAgentModel();
   }
+
+  // blocking cards mount here (perm/cfg/frm templates stay as source)
+  function mountCard(kind, { title, body, rule, buttons, amber }) {
+    unmountCard(kind);
+    const host = $(kind + "-slot");
+    const el = document.createElement("section");
+    el.className = "card" + (amber ? " amber" : "");
+    el.id = kind + "-live";
+    el.innerHTML = `<h2>${title}</h2><div></div><div class="res"></div><p class="row"></p>`;
+    el.children[1].textContent = body;
+    el.children[2].textContent = rule ?? "";
+    const row = el.children[3];
+    buttons.forEach(([label, cls, fn]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      if (cls) b.className = cls;
+      b.onclick = fn;
+      row.appendChild(b);
+    });
+    const hint = document.createElement("span");
+    hint.className = "res";
+    hint.textContent = kind === "perm" ? "voice: say “allow” or “deny”"
+      : kind === "cfg" ? "voice: say “yes, apply it” or “no”"
+      : "voice: say the option, or answer by hand";
+    row.appendChild(hint);
+    host.appendChild(el);
+    return el;
+  }
+  function unmountCard(kind) {
+    document.getElementById(kind + "-live")?.remove();
+  }
+
+  async function refreshAgentColors() {
+    try {
+      const a = await window.jarvis.agentList();
+      for (const x of (a.agents?.data ?? [])) {
+        if (x.color) agentColors[x.id] = x.color;
+      }
+      requestFrame();
+    } catch {}
+  }
+
+  window.jarvis?.onFleetState(({ snapshot }) => renderRing(snapshot));
+  window.jarvis?.onWorkerStream(({ sessionID, delta }) => {
+    transcripts[sessionID] = (transcripts[sessionID] ?? "") + delta;
+    if (selected === sessionID) $("work-log").textContent = transcripts[sessionID];
+  });
+  window.jarvis?.onTool(({ sessionID, tool, state }) => {
+    traces[sessionID] = traces[sessionID] ?? [];
+    traces[sessionID].push(`${tool} → ${state}`);
+    if (selected === sessionID) $("work-tools").textContent = traces[sessionID].join("\n");
+    requestFrame();
+  });
+  window.jarvis?.onPermission(({ request }) => {
+    sndPermission();
+    const el = mountCard("perm", {
+      title: "Permission waiting",
+      body: `Worker ${request.sessionID.slice(0, 8)} needs ${request.action}`,
+      rule: (request.resources ?? []).join(" "),
+      buttons: [
+        ["Allow once", "", async () => { await window.jarvis.permissionRespond(request.requestID, "allow"); unmountCard("perm"); }],
+        ["Deny", "danger", async () => { await window.jarvis.permissionRespond(request.requestID, "deny"); unmountCard("perm"); }],
+      ],
+    });
+    el.dataset.requestID = request.requestID;
+    // legacy hooks
+    $("perm").dataset.requestID = request.requestID;
+    renderRing(workers.map((w) => w.id === request.sessionID ? { ...w, state: "permission", pending: request } : w));
+  });
+  window.jarvis?.onPermissionResolved(() => { unmountCard("perm"); $("perm").classList.remove("show"); sndDone(); });
+  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
+  window.jarvis?.onDone(({ modelUsed, status }) => {
+    const line = `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;
+    const s = document.createElement("span");
+    s.className = "sys";
+    s.textContent = line;
+    log.appendChild(s);
+    if (modelUsed) $("h-model").textContent = `${modelUsed.id}${modelUsed.id === "gpt-6-luna" ? "" : "*"}`;
+    (status === "ok" ? sndDone : sndFault)();
+  });
+  window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
+  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; log.textContent += "\n> (speech) " + text + "\n"; });
+  window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
+
+  const auditEl = () => document.getElementById("audit");
+  let ACC = { phosphor: "#c8f04a" };
+  function paintSettings(s) {
+    if (s.accent && ACC[s.accent]) document.documentElement.style.setProperty("--accent", ACC[s.accent]);
+    if (s.captionSize) cap.style.fontSize = { small: "12px", medium: "14px", large: "18px" }[s.captionSize] ?? "14px";
+    document.body.dataset.density = s.density ?? "";
+    document.body.dataset.layout = s.layout ?? "";
+  }
+  function auditRow(e) {
+    return `[${new Date(e.at).toLocaleTimeString()}] ${e.bucket}: ${e.what}${e.needsRestart ? " (restart needed)" : ""}`;
+  }
+  window.jarvis?.onSettings(({ entry, settings }) => {
+    paintSettings(settings);
+    const el = auditEl();
+    if (el) el.textContent += auditRow(entry) + "\n";
+    log.textContent += `\n[settings] ${entry.what} — live\n`;
+    sndDone();
+  });
+  window.jarvis?.settingsGet().then((r) => {
+    if (!r?.ok) return;
+    ACC = r.accents ?? ACC;
+    paintSettings(r.settings);
+    const el = auditEl();
+    if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
+  });
+
+  window.jarvis?.onConfigPending(({ pending }) => {
+    sndPermission();
+    const el = mountCard("cfg", {
+      title: "Config change — confirm",
+      body: pending.summary,
+      rule: pending.rule?.action ? JSON.stringify(pending.rule) : (pending.target ?? ""),
+      amber: true,
+      buttons: [
+        ["Yes, apply it", "", async () => { await window.jarvis.configConfirm(pending.pendingID, true); unmountCard("cfg"); }],
+        ["Discard", "ghost", async () => { await window.jarvis.configConfirm(pending.pendingID, false); unmountCard("cfg"); }],
+      ],
+    });
+    el.dataset.pendingID = pending.pendingID;
+    $("cfg").dataset.pendingID = pending.pendingID;
+  });
+  const cfgHide = () => { unmountCard("cfg"); $("cfg").style.display = "none"; };
+  window.jarvis?.onConfigApplied(({ entry, note }) => {
+    cfgHide(); sndDone();
+    log.textContent += `\n[config] ${entry.what} — ${note ?? "live"}\n`;
+    const el = document.getElementById("audit");
+    if (el && entry) el.textContent += `[${new Date(entry.at).toLocaleTimeString()}] ${entry.bucket}: ${entry.what}\n`;
+  });
+  window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
+  $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
+  $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
+
+  window.jarvis?.onFormWaiting(({ sessionID, forms }) => {
+    sndPermission();
+    const f = forms[0];
+    if (!f) return;
+    const box = document.createElement("div");
+    (f.fields ?? []).forEach((fd) => {
+      const h = document.createElement("div");
+      h.textContent = `${fd.title ?? fd.key}: ${fd.description ?? ""}`;
+      box.appendChild(h);
+      (fd.options ?? []).forEach((o) => {
+        const b = document.createElement("button");
+        b.className = "ghost";
+        b.textContent = o.label ?? o.value;
+        b.onclick = async () => {
+          await window.jarvis.formReply(sessionID, f.formID, { [fd.key]: o.value ?? o.label });
+          unmountCard("frm");
+        };
+        box.appendChild(b);
+        box.appendChild(document.createTextNode(" "));
+      });
+    });
+    const el = mountCard("frm", {
+      title: f.title ?? "Question",
+      body: `Worker ${sessionID.slice(0, 8)} asks — answer to continue`,
+      amber: true,
+      buttons: [],
+    });
+    el.children[1].appendChild(box);
+    el.dataset.sessionID = sessionID;
+    el.dataset.formID = f.formID;
+    $("frm").style.display = "block";
+    $("frm-title").textContent = f.title ?? "Question";
+    $("frm").dataset.sessionID = sessionID;
+    $("frm").dataset.formID = f.formID;
+    const legacy = $("frm-fields");
+    legacy.innerHTML = "";
+    (f.fields ?? []).forEach((fd) => {
+      const h = document.createElement("div");
+      h.textContent = `${fd.title ?? fd.key}: ${fd.description ?? ""}`;
+      legacy.appendChild(h);
+      (fd.options ?? []).forEach((o) => {
+        const b = document.createElement("button");
+        b.className = "ghost";
+        b.textContent = o.label ?? o.value;
+        b.onclick = async () => {
+          await window.jarvis.formReply(sessionID, f.formID, { [fd.key]: o.value ?? o.label });
+          unmountCard("frm");
+          $("frm").style.display = "none";
+        };
+        legacy.appendChild(b);
+      });
+    });
+  });
+  window.jarvis?.onFormResolved(() => { unmountCard("frm"); $("frm").style.display = "none"; sndDone(); });
+
   async function fillAgentModel() {
     try {
       const a = await window.jarvis.agentList();
@@ -196,108 +639,9 @@
     const [providerID, ...rest] = e.target.value.split("/");
     await window.jarvis.sessionSwitchModel(selected, providerID, rest.join("/"));
   };
-  window.jarvis?.onFleetState(({ snapshot }) => renderRing(snapshot));
-  window.jarvis?.onWorkerStream(({ sessionID, delta }) => {
-    transcripts[sessionID] = (transcripts[sessionID] ?? "") + delta;
-    if (selected === sessionID) $("work-log").textContent = transcripts[sessionID];
-  });
-  window.jarvis?.onTool(({ sessionID, tool, state }) => {
-    traces[sessionID] = traces[sessionID] ?? [];
-    traces[sessionID].push(`${tool} → ${state}`);
-    if (selected === sessionID) $("work-tools").textContent = traces[sessionID].join("\n");
-  });
-  window.jarvis?.onPermission(({ request }) => {
-    sndPermission();
-    $("perm").classList.add("show");
-    $("perm-text").textContent = `Worker ${request.sessionID.slice(0, 8)} needs ${request.action}`;
-    $("perm-res").textContent = (request.resources ?? []).join(" ");
-    $("perm").dataset.requestID = request.requestID;
-    renderRing(workers.map((w) => w.id === request.sessionID ? { ...w, state: "permission", pending: request } : w));
-  });
-  window.jarvis?.onPermissionResolved(() => { $("perm").classList.remove("show"); sndDone(); });
-  // Server-config widening: second confirm, shows the exact rule.
-  window.jarvis?.onConfigPending(({ pending }) => {
-    sndPermission();
-    $("cfg").style.display = "block";
-    $("cfg-text").textContent = pending.summary;
-    $("cfg-rule").textContent = pending.rule?.action ? JSON.stringify(pending.rule) : (pending.target ?? "");
-    $("cfg").dataset.pendingID = pending.pendingID;
-  });
-  const cfgHide = () => { $("cfg").style.display = "none"; };
-  window.jarvis?.onConfigApplied(({ entry, note }) => {
-    cfgHide(); sndDone();
-    log.textContent += `\n[config] ${entry.what} — ${note ?? "live"}\n`;
-    const el = document.getElementById("audit");
-    if (el && entry) el.textContent += `[${new Date(entry.at).toLocaleTimeString()}] ${entry.bucket}: ${entry.what}\n`;
-  });
-  window.jarvis?.onConfigDiscarded(() => { cfgHide(); log.textContent += "\n[config] discarded, nothing written\n"; });
-  $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
-  $("cfg-no").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, false); cfgHide(); };
-  // Forms: blocking card with one button per option. Voice matches option text.
-  window.jarvis?.onFormWaiting(({ sessionID, forms }) => {
-    sndPermission();
-    const f = forms[0];
-    if (!f) return;
-    $("frm").style.display = "block";
-    $("frm-title").textContent = f.title ?? "Question";
-    $("frm").dataset.sessionID = sessionID;
-    $("frm").dataset.formID = f.formID;
-    const box = $("frm-fields");
-    box.innerHTML = "";
-    (f.fields ?? []).forEach((fd) => {
-      const h = document.createElement("div");
-      h.textContent = `${fd.title ?? fd.key}: ${fd.description ?? ""}`;
-      box.appendChild(h);
-      (fd.options ?? []).forEach((o) => {
-        const b = document.createElement("button");
-        b.className = "ghost";
-        b.textContent = o.label ?? o.value;
-        b.onclick = async () => {
-          await window.jarvis.formReply(sessionID, f.formID, { [fd.key]: o.value ?? o.label });
-          $("frm").style.display = "none";
-        };
-        box.appendChild(b);
-      });
-    });
-  });
-  window.jarvis?.onFormResolved(() => { $("frm").style.display = "none"; sndDone(); });
-  window.jarvis?.onStream(({ delta }) => { log.textContent += delta; });
-  window.jarvis?.onDone(({ modelUsed, status }) => {
-    log.textContent += `\n[${status} via ${modelUsed?.providerID}/${modelUsed?.id}]\n`;
-    (status === "ok" ? sndDone : sndFault)();
-  });
-  window.jarvis?.onCaption(({ text }) => { cap.textContent = text; });
-  window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; log.textContent += "\n> (speech) " + text + "\n"; });
-  window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
-  // Shell settings: audit log, not the only way to change them. Applied next frame.
-  const auditEl = () => document.getElementById("audit");
-  let ACC = { phosphor: "#c8f04a" };
-  function paintSettings(s) {
-    if (s.accent && ACC[s.accent]) document.documentElement.style.setProperty("--accent", ACC[s.accent]);
-    if (s.captionSize) cap.style.fontSize = { small: "12px", medium: "14px", large: "18px" }[s.captionSize] ?? "14px";
-    document.body.dataset.density = s.density ?? "";
-    document.body.dataset.layout = s.layout ?? "";
-  }
-  function auditRow(e) {
-    return `[${new Date(e.at).toLocaleTimeString()}] ${e.bucket}: ${e.what}${e.needsRestart ? " (restart needed)" : ""}`;
-  }
-  window.jarvis?.onSettings(({ entry, settings }) => {
-    paintSettings(settings);
-    const el = auditEl();
-    if (el) el.textContent += auditRow(entry) + "\n";
-    log.textContent += `\n[settings] ${entry.what} — live\n`;
-    sndDone();
-  });
-  window.jarvis?.settingsGet().then((r) => {
-    if (!r?.ok) return;
-    ACC = r.accents ?? ACC;
-    paintSettings(r.settings);
-    const el = auditEl();
-    if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
-  });
 
-  $("allow").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "allow"); $("perm").classList.remove("show"); };
-  $("deny").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "deny"); $("perm").classList.remove("show"); };
+  $("allow").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "allow"); unmountCard("perm"); $("perm").classList.remove("show"); };
+  $("deny").onclick = async () => { await window.jarvis.permissionRespond($("perm").dataset.requestID, "deny"); unmountCard("perm"); $("perm").classList.remove("show"); };
   $("spawn").onclick = async () => {
     const task = prompt("Worker task:", "Run `ls` and report the first 3 entries. Do not edit files.");
     if (!task) return;
@@ -326,6 +670,7 @@
     log.textContent += `\n[undone, redo branch ${r.redoID}]\n`;
     $("work-diff").textContent = "";
   };
+  $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); log.textContent += "\n[compacted]\n"; } };
   $("work-back").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -340,6 +685,9 @@
     if (ap) files.push({ uri: ap.startsWith("file://") ? ap : "file://" + ap, name: ap.split("/").pop() });
     const r = await window.jarvis.commitUtterance({ id: crypto.randomUUID(), text, source: "typed", engine: "typed", committedAt: Date.now() }, { files });
     if (r?.control === "command" || r?.control === "skill") log.textContent += `\n[${r.control} ${r.name} sent]\n`;
+    if (r?.control === "app.command") log.textContent += `\n[settings] ${r.entry.what} — live\n`;
+    if (r?.control === "config.apply") log.textContent += `\n[config] ${r.note ?? r.name}\n`;
+    if (r?.control === "config.stage") log.textContent += `\n[config] staged — confirm on the card\n`;
   });
   $("fa").addEventListener("submit", (e) => { e.preventDefault(); log.textContent += "\n[attach staged — send a message to include it]\n"; });
   (async () => {
@@ -359,18 +707,20 @@
       });
     } catch {}
   })();
-  $("mic").onclick = async (e) => {
-    const b = e.target;
+  const micBtn = $("mic");
+  micBtn.onclick = async () => {
+    if (micBtn.classList.contains("live")) { await window.jarvis.audioStop(); micBtn.classList.remove("live"); return; }
+    micBtn.classList.add("live");
+    cap.textContent = "listening…";
     const r = await window.jarvis.audioStart({});
+    micBtn.classList.remove("live");
     if (!r?.ok) cap.textContent = r?.reason ?? "mic stopped";
   };
-  window.jarvis?.fleetList().then((r) => renderRing(r.workers));
-  // Yard: opened on purpose. Shell-backed run/poll/kill.
   let termID = null, termTimer = null;
   $("yard-toggle").onclick = () => {
-    const y = $("yard");
-    y.style.display = y.style.display === "none" ? "block" : "none";
-    $("yard-toggle").textContent = y.style.display === "none" ? "Open yard" : "Close yard";
+    const y = $("yard-details");
+    y.open = !y.open;
+    $("yard-toggle").textContent = y.open ? "Close yard" : "Open yard";
   };
   async function termPoll() {
     if (!termID) return;
@@ -388,8 +738,6 @@
     termTimer = setInterval(termPoll, 1000);
   });
   $("term-kill").onclick = async () => { if (termID) { await window.jarvis.termKill(termID); termID = null; clearInterval(termTimer); } };
-  $("work-compact").onclick = async () => { if (selected) { await window.jarvis.sessionCompact(selected); log.textContent += "\n[compacted]\n"; } };
-  // Yard project switch + worktrees.
   $("proj-f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const dir = $("proj-dir").value.trim() || undefined;
@@ -404,7 +752,6 @@
       $("wt-out").textContent = (Array.isArray(wts) ? wts : []).map((w) => w.directory).join("\n") || "(none)";
     } catch (e) { $("wt-out").textContent = String(e.message ?? e); }
   };
-  // MCP: status for every server, sign-in by hand when disconnected.
   async function mcpRefresh() {
     try {
       const r = await window.jarvis.mcpList();
@@ -412,7 +759,13 @@
     } catch (e) { $("mcp-list").textContent = String(e.message ?? e); }
   }
   $("mcp-refresh").onclick = mcpRefresh;
+
+  sizeCanvas();
+  layoutTargets();
+  requestFrame();
+  refreshAgentColors();
   mcpRefresh();
+  window.jarvis?.fleetList().then((r) => renderRing(r.workers));
 </script>
 </body>
 </html>
