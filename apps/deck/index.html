@@ -106,7 +106,10 @@
   #log .sys { color: var(--dim); font-family: var(--cap); font-size: 11px; }
   .msg { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 9px 2px; border-bottom: 1px solid rgba(120, 150, 140, 0.09); animation: cardin 160ms ease; }
   .msg .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; }
-  .msg.you .dot { background: #7dd3fc; box-shadow: 0 0 8px rgba(125, 211, 252, 0.5); }
+  .msg.you { grid-template-columns: 1fr 14px; }
+  .msg.you .dot { order: 2; background: #7dd3fc; box-shadow: 0 0 8px rgba(125, 211, 252, 0.5); }
+  .msg.you .main { order: 1; justify-self: end; max-width: 88%; background: #0c1a24; border: 1px solid #23404f; border-radius: 12px 12px 3px 12px; padding: 8px 12px; }
+  .msg.you .meta { text-align: right; }
   .msg.jarvis .dot { background: var(--accent); box-shadow: 0 0 8px rgba(200, 240, 74, 0.45); }
   .msg .meta { font-family: var(--cap); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); margin-bottom: 2px; }
   .msg .meta .t { opacity: 0.75; letter-spacing: 0.04em; }
@@ -629,6 +632,7 @@
     const dot = document.createElement("span");
     dot.className = "dot";
     const main = document.createElement("div");
+    main.className = "main";
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = (opts.name ?? (from === "you" ? "You" : "Jarvis")) + "  ";
