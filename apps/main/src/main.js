@@ -4,15 +4,18 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
+import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
-import { brainRespond, setBrainModel } from "./brain/brain.js";
+import { brainRespond, brainReview, setBrainModel } from "./brain/brain.js";
+import { collectWorkerReport, reportHeadline } from "./brain/report.js";
+import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChain, discardChain } from "./worktrees.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
 import { isVoiceMode, nextVoiceAction } from "./voice.js";
 import { ensureFleetOrAsk, startCreate, answerCreate, pendingBootstraps } from "./bootstrap.js";
 import { parseExplicitAgent, resolveAgent, getFleetRegistry } from "./autoroute.js";
+import { projectDir, projectName, recentProjects, setProject, matchProjectCommand } from "./project.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bootStash = new Map(); // bootID -> { task, directory, gate, conv?, ctx? }
@@ -25,7 +28,7 @@ const latestConfigPending = () => [...pendingConfigs.keys()].pop() ?? null;
 const publicPending = (s) => ({ pendingID: s.pendingID, kind: s.kind, summary: s.summary, rule: { action: s.action, resources: s.resources, effect: s.effect } });
 const withDeleteTarget = (spec) => ({ ...spec, target: latestActiveWorker()?.sessionID ?? null });
 const widenHooks = () => ({
-  jarvisSessionID: async () => ensureJarvisSession(process.cwd()),
+  jarvisSessionID: async () => ensureJarvisSession(projectDir()),
   resolveTarget: async (staged) => staged.target ?? latestActiveWorker()?.sessionID ?? null,
   deleteTarget: async (id) => deleteWorker(id),
 });
@@ -102,8 +105,8 @@ async function buildBootstrapCtx(directory) {
   return { client, directory, providers, modelsByProvider };
 }
 
-async function dispatchTask(task, { agent, directory } = {}, broadcast) {
-  const dir = directory ?? process.cwd();
+async function dispatchTask(task, { agent, directory, chain, round } = {}, broadcast) {
+  const dir = directory ?? projectDir();
   const { client } = await ensureClient();
   const said = agent ? { agent, task } : parseExplicitAgent(task);
   const cleanTask = said?.task ?? task;
@@ -122,9 +125,23 @@ async function dispatchTask(task, { agent, directory } = {}, broadcast) {
       return { ok: true, needBootstrap: true, id };
     }
   }
-  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: dir });
+  // Isolation: a chain continues in its own worktree; a new chain gets one
+  // unless the user chose shared mode or the directory is not a git repo.
+  let workDir = dir;
+  let fresh = null;
+  const open = chain ? chains.get(chain) : null;
+  if (open?.state === "open") workDir = open.directory;
+  else if (!chain && settings.isolation !== "shared") {
+    fresh = await createChainWorktree(dir, cleanTask).catch((err) => {
+      console.error("worktree create failed, using shared checkout:", err?.message ?? err);
+      return null;
+    });
+    if (fresh) workDir = fresh.directory;
+  }
+  const res = await spawnWorker(cleanTask, { agent: agent ?? r.agent, directory: workDir, project: dir, chain, round });
+  if (fresh) bindChain(res.sessionID, fresh);
   broadcast({ kind: "fleet.state", snapshot: snapshot() });
-  return { ok: true, ...res, agent: agent ?? r.agent, reason: r.reason ?? `default->${agent ?? r.agent}` };
+  return { ok: true, ...res, agent: agent ?? r.agent, branch: fresh?.branch ?? open?.branch ?? null, reason: r.reason ?? `default->${agent ?? r.agent}` };
 }
 
 async function answerBootstrapText(id, text, win, broadcast) {
@@ -178,6 +195,75 @@ function parseSlash(text) {
   return null;
 }
 
+// Bring a project's Jarvis state up: its worker-parent session (persisted),
+// the workers under it, and its open worktree chains.
+async function loadProject(dir) {
+  const { client } = await ensureClient();
+  const parentID = await ensureJarvisSession(dir);
+  loadChains(dir);
+  const n = await rehydrateWorkers(client, parentID, dir).catch((err) => {
+    console.error("rehydrate failed:", err?.message ?? err);
+    return 0;
+  });
+  return { dir, name: projectName(dir), workers: n };
+}
+
+function projectInfo() {
+  const dir = projectDir();
+  return { dir, name: projectName(dir), recent: recentProjects() };
+}
+
+async function switchProject(dir, broadcast) {
+  const r = setProject(dir);
+  if (r.changed) await loadProject(r.dir);
+  broadcast({ kind: "project.changed", project: projectInfo() });
+  broadcast({ kind: "fleet.state", snapshot: snapshot() });
+  return { ok: true, ...r };
+}
+
+// Land / keep / discard a chain's worktree. Refuses while any worker in the
+// chain is still running, so nothing is merged half-done.
+async function chainAction(action, chainID, broadcast) {
+  const target = chainID ? { chainID, busy: chainBusy(chainID) } : latestSettledChain();
+  if (!target) return { ok: false, reason: "no open worktree to " + action };
+  if (target.busy) return { ok: false, reason: "workers in that chain are still running; stop them or wait" };
+  const fn = { land: landChain, keep: keepChain, discard: discardChain }[action];
+  if (!fn) return { ok: false, reason: `unknown action: ${action}` };
+  const r = await fn(target.chainID);
+  broadcast({ kind: "fleet.state", snapshot: snapshot() });
+  broadcast({ kind: "chain.result", chainID: target.chainID, ...r });
+  return { chainID: target.chainID, ...r };
+}
+
+// Closed loop: a finished worker reports back to Jarvis, who reviews the
+// outcome in the chat and may take one next step (follow up with the same
+// worker, or dispatch a specialist). Bounded by MAX_ROUNDS per chain; off with
+// "turn review mode off".
+async function reviewWorker(ev, broadcast) {
+  if (!ev.review || shellStore().settings.reviewMode === "off") return;
+  const w = workers.get(ev.sessionID);
+  if (!w) return;
+  const say = (delta) => win?.webContents.send("session.stream", { delta });
+  const { client } = await ensureClient();
+  const report = await collectWorkerReport(client, w, { status: ev.status, error: ev.error, worktree: chains.get(w.chain) });
+  broadcast({
+    kind: "worker.report",
+    report: { sessionID: report.sessionID, agent: report.agent, round: report.round, status: report.status, headline: reportHeadline(report), files: report.files, branch: report.worktree?.branch ?? null },
+  });
+  const r = await brainReview(report, say);
+  win?.webContents.send("session.done", { modelUsed: r.modelUsed, status: r.status });
+  for (const warn of r.warnings ?? []) say(`[review] ${warn}\n`);
+  if (r.followup) {
+    const f = await followUpWorker(report.sessionID, r.followup.task);
+    broadcast({ kind: "fleet.state", snapshot: snapshot() });
+    say(`[fleet] follow-up → ${report.agent} (${report.sessionID.slice(0, 8)}) round ${f.round}\n`);
+  } else if (r.dispatch) {
+    const dr = await dispatchTask(r.dispatch.task, { agent: r.dispatch.agent, directory: report.project ?? undefined, chain: report.chain, round: report.round + 1 }, broadcast);
+    if (dr.ok && !dr.needBootstrap) say(`[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})\n`);
+    else if (!dr.ok) say(`[fleet] dispatch refused: ${dr.reason}\n`);
+  }
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
 
@@ -197,7 +283,8 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   await ensureClient();
-  await ensureJarvisSession(process.cwd());
+  setProject(projectDir());
+  await loadProject(projectDir());
   const broadcast = (msg) => win?.webContents.send(msg.kind, msg);
   await ensureFleetPump((ev) => {
     if (ev.kind === "permission.waiting") broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
@@ -206,6 +293,13 @@ app.whenReady().then(async () => {
     else if (ev.kind === "worker.stream") broadcast({ kind: "worker.stream", ...ev });
     else if (ev.kind === "form.waiting") broadcast({ kind: "form.waiting", ...ev });
     else if (ev.kind === "form.resolved") broadcast({ kind: "form.resolved", ...ev });
+    else if (ev.kind === "worker.done") {
+      broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
+      reviewWorker(ev, broadcast).catch((err) => {
+        console.error("worker review failed:", err?.message ?? err);
+        win?.webContents.send("session.stream", { delta: `[review] failed: ${String(err?.message ?? err).slice(0, 160)}\n` });
+      });
+    } else if (ev.kind === "fleet.pump") broadcast({ kind: "fleet.pump", state: ev.state, attempt: ev.attempt });
     else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
   });
   const commitText = async (text, files) => {
@@ -223,7 +317,7 @@ app.whenReady().then(async () => {
     if (routed.route === "config.confirm") {
       const r = await confirmWidening(
         (await ensureClient()).client,
-        process.cwd(),
+        projectDir(),
         latestConfigPending(),
         routed.confirmed,
         widenHooks(),
@@ -232,7 +326,7 @@ app.whenReady().then(async () => {
       return { ok: true, control: "config.confirm", ...r };
     }
     if (routed.route === "config.apply") {
-      const r = await applyAgentFile((await ensureClient()).client, process.cwd(), routed.spec);
+      const r = await applyAgentFile((await ensureClient()).client, projectDir(), routed.spec);
       const entry = configAudit("agent-file", r);
       broadcast({ kind: "config.applied", entry, agent: r.name, note: r.note });
       return { ok: true, control: "config.apply", ...r };
@@ -246,6 +340,22 @@ app.whenReady().then(async () => {
     if (bootID) {
       const r = await answerBootstrapText(bootID, text, win, broadcast);
       return { ok: true, control: "bootstrap", ...r };
+    }
+    const proj = routed.route === "prompt" ? matchProjectCommand(text) : null;
+    if (proj) {
+      const r = proj.error ? { ok: false, reason: proj.error } : await switchProject(proj.dir, broadcast);
+      win?.webContents.send("session.stream", { delta: r.ok ? `[project] now working in ${r.name} (${r.dir})\n` : `[project] ${r.reason}\n` });
+      win?.webContents.send("session.done", { status: r.ok ? "ok" : "failed" });
+      return { ok: r.ok, control: "project", ...r };
+    }
+    if (routed.route === "chain.action") {
+      const r = await chainAction(routed.action, null, broadcast);
+      const line = r.ok
+        ? { land: `landed ${r.branch} into ${r.base}`, keep: `kept branch ${r.branch}; worktree removed`, discard: `discarded ${r.branch}` }[r.action]
+        : `${routed.action} refused: ${r.reason}`;
+      win?.webContents.send("session.stream", { delta: `[git] ${line}\n` });
+      win?.webContents.send("session.done", { status: r.ok ? "ok" : "failed" });
+      return { ok: r.ok, control: "chain.action", ...r };
     }
     if (routed.route === "stop-worker") {
       const w = latestActiveWorker();
@@ -266,10 +376,15 @@ app.whenReady().then(async () => {
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }).catch(async () => promptJarvis(text, (d) => {
-      // Brain fallback: direct session turn if the graph path fails.
-      win?.webContents.send("session.stream", { delta: d });
-    }, files?.length ? { files } : {}));
+    }).catch(async (err) => {
+      // Brain fallback: direct read-only turn if the graph path fails. Loud,
+      // so a broken brain never hides behind a working fallback.
+      console.error("brain failed, falling back to direct turn:", err?.message ?? err);
+      win?.webContents.send("session.stream", { delta: `[brain] ${String(err?.message ?? err).slice(0, 160)} — answering directly\n` });
+      return promptJarvis(text, (d) => {
+        win?.webContents.send("session.stream", { delta: d });
+      }, files?.length ? { files } : {});
+    });
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
     const dispatched = [];
     for (const w of r.warnings ?? []) {
@@ -282,7 +397,7 @@ app.whenReady().then(async () => {
       } else if (!dr.ok) {
         win?.webContents.send("session.stream", { delta: `\n[fleet] dispatch refused: ${dr.reason}\n` });
       } else {
-        win?.webContents.send("session.stream", { delta: `\n[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})\n` });
+        win?.webContents.send("session.stream", { delta: `\n[fleet] ${dr.reason} → ${dr.agent} (${String(dr.sessionID).slice(0, 8)})${dr.branch ? ` on ${dr.branch}` : ""}\n` });
       }
       dispatched.push({ task: d.task, ...dr });
     }
@@ -296,7 +411,7 @@ app.whenReady().then(async () => {
     const cmd = parseSlash(utterance.text);
     if (cmd) {
       const { client } = await ensureClient();
-      const sessionID = await ensureJarvisSession(process.cwd());
+      const sessionID = await ensureJarvisSession(projectDir());
       try {
         if (cmd.kind === "command") await client.session.command({ sessionID, name: cmd.name, text: cmd.rest });
         else await client.session.skill({ sessionID, id: cmd.name });
@@ -313,6 +428,14 @@ app.whenReady().then(async () => {
       throw err;
     }
   });
+  ipcMain.handle("project.get", async () => projectInfo());
+  ipcMain.handle("project.set", async (_e, { dir } = {}) => switchProject(dir, broadcast));
+  ipcMain.handle("project.open", async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ["openDirectory"], title: "Open project folder" });
+    if (r.canceled || !r.filePaths?.[0]) return { ok: false, canceled: true };
+    return switchProject(r.filePaths[0], broadcast);
+  });
+  ipcMain.handle("chain.action", async (_e, { action, chainID } = {}) => chainAction(action, chainID, broadcast));
   ipcMain.handle("audio.start", async (_e, { simulate, engine } = {}) => {
     if (isListening()) return { ok: false, reason: "already-listening" };
     voiceSuspend = true;
@@ -381,7 +504,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("session.list", async () => ({ ok: true, sessions: await listSessions() }));
   ipcMain.handle("session.switchAgent", async (_e, { sessionID, agent } = {}) => switchSessionAgent(sessionID, agent));
   ipcMain.handle("session.switchModel", async (_e, { sessionID, providerID, id } = {}) => switchSessionModel(sessionID, providerID, id));
-  ipcMain.handle("agent.list", async () => ({ ok: true, agents: await listAgents(process.cwd()) }));
+  ipcMain.handle("agent.list", async () => ({ ok: true, agents: await listAgents(projectDir()) }));
   ipcMain.handle("model.list", async () => ({ ok: true, models: await listModels() }));
   ipcMain.handle("command.list", async () => ({ ok: true, commands: await listCommands() }));
   ipcMain.handle("skill.list", async () => ({ ok: true, skills: await listSkills() }));
@@ -401,13 +524,13 @@ app.whenReady().then(async () => {
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     return r;
   });
-  ipcMain.handle("term.start", async (_e, { command, timeout } = {}) => termStart(command, process.cwd(), timeout));
-  ipcMain.handle("term.output", async (_e, { id, cursor } = {}) => termOutput(id, process.cwd(), cursor));
-  ipcMain.handle("term.kill", async (_e, { id } = {}) => termKill(id, process.cwd()));
-  ipcMain.handle("pty.open", async () => ptyOpen(process.cwd()));
+  ipcMain.handle("term.start", async (_e, { command, timeout } = {}) => termStart(command, projectDir(), timeout));
+  ipcMain.handle("term.output", async (_e, { id, cursor } = {}) => termOutput(id, projectDir(), cursor));
+  ipcMain.handle("term.kill", async (_e, { id } = {}) => termKill(id, projectDir()));
+  ipcMain.handle("pty.open", async () => ptyOpen(projectDir()));
   ipcMain.handle("pty.attach", async (_e, { ptyID, cursor } = {}) => {
     const push = (kind) => (payload) => win?.webContents.send(kind, payload);
-    return ptyAttach(ptyID, process.cwd(), {
+    return ptyAttach(ptyID, projectDir(), {
       cursor,
       onChunk: push("pty.data"),
       onMeta: push("pty.meta"),
@@ -416,8 +539,8 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("pty.write", async (_e, { ptyID, data } = {}) => ptyWrite(ptyID, data));
   ipcMain.handle("pty.detach", async (_e, { ptyID } = {}) => ptyDetach(ptyID));
-  ipcMain.handle("pty.resize", async (_e, { ptyID, rows, cols } = {}) => ptyResize(ptyID, process.cwd(), rows, cols));
-  ipcMain.handle("pty.close", async (_e, { ptyID } = {}) => ptyClose(ptyID, process.cwd()));
+  ipcMain.handle("pty.resize", async (_e, { ptyID, rows, cols } = {}) => ptyResize(ptyID, projectDir(), rows, cols));
+  ipcMain.handle("pty.close", async (_e, { ptyID } = {}) => ptyClose(ptyID, projectDir()));
   ipcMain.handle("mcp.list", async () => {
     const { client } = await ensureClient();
     return { ok: true, servers: (await client.mcp.list()).data ?? [] };
@@ -436,7 +559,7 @@ app.whenReady().then(async () => {
     return { ok: true };
   });
   ipcMain.handle("project.list", async () => ({ ok: true, projects: await listProjects() }));
-  ipcMain.handle("worktree.here", async () => ({ ok: true, worktrees: await listWorktrees(await projectIDFor(process.cwd())) }));
+  ipcMain.handle("worktree.here", async () => ({ ok: true, worktrees: await listWorktrees(await projectIDFor(projectDir())) }));
   ipcMain.handle("worktree.list", async (_e, { projectID } = {}) => ({ ok: true, worktrees: await listWorktrees(projectID) }));
   ipcMain.handle("worktree.create", async (_e, args = {}) => ({ ok: true, worktree: await createWorktree(args.projectID, args) }));
   ipcMain.handle("worktree.remove", async (_e, { projectID, directory } = {}) => removeWorktree(projectID, directory));
@@ -474,7 +597,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("config.confirm", async (_e, { pendingID, confirmed } = {}) => {
     if (!pendingID || typeof confirmed !== "boolean") throw new Error("config.confirm: pendingID + confirmed required");
-    const r = await confirmWidening((await ensureClient()).client, process.cwd(), pendingID, confirmed, widenHooks());
+    const r = await confirmWidening((await ensureClient()).client, projectDir(), pendingID, confirmed, widenHooks());
     broadcastConfig(r);
     return { ok: true, ...r };
   });
