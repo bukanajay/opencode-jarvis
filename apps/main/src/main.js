@@ -69,7 +69,7 @@ async function createWindow() {
     height: 760,
     backgroundColor: "#060809",
     webPreferences: {
-      preload: path.join(here, "preload.js"),
+      preload: path.join(here, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },

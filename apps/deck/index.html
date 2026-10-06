@@ -255,6 +255,9 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const ring = $("ring"), log = $("log"), cap = $("caption");
+  if (!window.jarvis) {
+    log.textContent = "[fault] bridge missing: preload did not load. Quit and relaunch the app.\n";
+  }
   const ACCENT_FALLBACK = "#c8f04a";
   let workers = [], selected = null, transcripts = {}, traces = {};
   let agentColors = { build: ACCENT_FALLBACK, plan: "#7dd3fc", reviewer: "#ff9f5d" };
@@ -282,6 +285,11 @@
   const ctx = ring.getContext("2d");
   const nodes = new Map(); // id -> {x, y, tx, ty, phase}
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  let timerOn = false;
+  function requestFrame() {
+    // setTimeout chain, not rAF: the loop must survive throttled frames.
+    if (!timerOn) { timerOn = true; setTimeout(() => { timerOn = false; draw(performance.now()); }, 33); }
+  }
   let stars = [];
   function seedStars() {
     const W = ring.width, H = ring.height;
@@ -324,10 +332,12 @@
     c.closePath();
   }
   function draw(now) {
-    rafOn = false;
+    timerOn = false;
+    // re-fit if layout changed since last paint
+    const wantW = Math.max(1, Math.round(ring.getBoundingClientRect().width * Math.min(window.devicePixelRatio || 1, 2)));
+    if (ring.width !== wantW) { sizeCanvas(); layoutTargets(); }
     const W = ring.width, H = ring.height, dpr = Math.min(window.devicePixelRatio || 1, 2);
     const t = (reduceMotion ? 0 : now / 1000);
-    let moving = false;
     ctx.clearRect(0, 0, W, H);
     // starfield: faint, slow twinkle
     for (const s of stars) {
@@ -384,7 +394,7 @@
       const k = 1 - Math.pow(0.001, 1 / 60); // ~150ms ease
       n.x += (n.tx - n.x) * k;
       n.y += (n.ty - n.y) * k;
-      if (Math.abs(n.tx - n.x) + Math.abs(n.ty - n.y) > 0.6) moving = true;
+      if (Math.abs(n.tx - n.x) + Math.abs(n.ty - n.y) > 0.6) { /* easing toward target */ }
       const hot = w.state === "permission" || !!w.pending;
       const active = w.state === "working";
       const col = hot ? "#ff5d5d" : colorFor(w);
@@ -416,9 +426,6 @@
     }
     // ambient loop: the fleet breathes; state changes still ease in 120–200ms
     setTimeout(requestFrame, reduceMotion ? 1000 : 33);
-  }
-  function requestFrame() {
-    if (!rafOn) { rafOn = true; requestAnimationFrame(draw); }
   }
   ring.addEventListener("click", (e) => {
     const r = ring.getBoundingClientRect();
