@@ -221,7 +221,6 @@
       </div>
       <div class="row" style="margin-top:10px;">
         <button class="ghost" id="spawn">Launch worker</button>
-        <button class="ghost" id="stop">Stop latest</button>
       </div>
     </section>
     <section class="chat">
@@ -876,9 +875,14 @@
   $("spawn").onclick = async () => {
     const task = prompt("Worker task:", "Run `ls` and report the first 3 entries. Do not edit files.");
     if (!task) return;
-    const r = await window.jarvis.fleetSpawn(task);
-    spawnNote(r);
-    window.jarvis.fleetList().then((r) => renderRing(r.workers));
+    try {
+      const r = await window.jarvis.fleetSpawn(task);
+      spawnNote(r);
+      window.jarvis.fleetList().then((r) => renderRing(r.workers));
+    } catch (e) {
+      addSys(`fault · launch failed: ${e.message ?? e}`, { bad: true });
+      sndFault();
+    }
   };
   function spawnNote(r) {
     if (!r) return;
@@ -886,8 +890,16 @@
     else if (!r.ok) addSys(`fault · ${r.reason ?? "spawn failed"}`, { bad: true });
     else if (r.reason) addSys(`fleet · ${r.reason} → ${r.agent}`);
   }
-  $("stop").onclick = async () => { await window.jarvis.fleetStop(); };
-  $("work-stop").onclick = async () => { if (selected) await window.jarvis.fleetStop(selected); };
+  $("work-stop").onclick = async () => {
+    if (!selected) return;
+    try {
+      await window.jarvis.fleetStop(selected);
+      addSys("worker stopped");
+      window.jarvis.fleetList().then((r) => renderRing(r.workers));
+    } catch (e) {
+      addSys(`fault · stop failed: ${e.message ?? e}`, { bad: true });
+    }
+  };
   $("work-rename").onclick = async () => {
     if (!selected) return;
     const title = prompt("Rename session:", workers.find((w) => w.id === selected)?.task ?? "");
