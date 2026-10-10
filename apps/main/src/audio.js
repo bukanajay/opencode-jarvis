@@ -1,19 +1,29 @@
 // Main-side audio ownership. Spawns one utterance at a time from whichever
-// helper JARVIS_AUDIO_ENGINE selects. Both helpers speak protocol.md, so the
-// deck cannot tell engines apart. Final -> Utterance with source:"speech".
+// helper JARVIS_AUDIO_ENGINE selects (default: parakeet on Apple Silicon once
+// its live binary is built, else speech-analyzer). Both helpers speak
+// protocol.md, so the deck cannot tell engines apart. Final -> Utterance with
+// source:"speech".
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const PARAKEET_LIVE = path.join(here, "../../audio-parakeet/bin/parakeet");
+const PARAKEET_SIM = path.join(here, "../../audio-parakeet/bin/parakeet-sim");
 
 export const ENGINES = {
   "speech-analyzer": { bin: path.join(here, "../../audio-speech-analyzer/bin/speech-analyzer"), label: "speech-analyzer" },
-  parakeet: { bin: path.join(here, "../../audio-parakeet/bin/parakeet"), label: "parakeet-v3" },
+  // The live binary (npm run build:parakeet) wins; the sim covers Intel and CI.
+  parakeet: { bin: existsSync(PARAKEET_LIVE) ? PARAKEET_LIVE : PARAKEET_SIM, label: "parakeet-v3" },
 };
 
+export function defaultEngine({ platform = process.platform, arch = process.arch, hasParakeet = existsSync(PARAKEET_LIVE) } = {}) {
+  return platform === "darwin" && arch === "arm64" && hasParakeet ? "parakeet" : "speech-analyzer";
+}
+
 export function resolveEngine(name) {
-  const key = name ?? process.env.JARVIS_AUDIO_ENGINE ?? "speech-analyzer";
+  const key = name ?? process.env.JARVIS_AUDIO_ENGINE ?? defaultEngine();
   const eng = ENGINES[key];
   if (!eng) throw new Error(`unknown audio engine: ${key} (known: ${Object.keys(ENGINES).join(", ")})`);
   return { key, ...eng };
@@ -34,11 +44,12 @@ export function stopListening() {
 
 // onPartial({ id, text, revision }) — renderer replaces caption, never appends.
 // Resolves { id, text } on final. Rejects on mic/speech denial or timeout.
-export function listenOnce({ onPartial, simulate, timeoutMs = 90000, engine } = {}) {
+export function listenOnce({ onPartial, simulate, replay, timeoutMs = 90000, engine } = {}) {
   stopListening();
   const eng = resolveEngine(engine);
   return new Promise((resolve, reject) => {
-    const args = simulate ? ["--simulate", simulate] : [];
+    // replay: parakeet streams an audio file through its live VAD path (proofs).
+    const args = simulate ? ["--simulate", simulate] : replay ? ["--replay", replay] : [];
     const child = spawn(eng.bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     active = child;
     const done = (fn, val) => {
@@ -74,7 +85,8 @@ export function listenOnce({ onPartial, simulate, timeoutMs = 90000, engine } = 
         }
       }
     });
-    child.on("close", () => {});
+    // Killed (stopListening) or exited without a final: settle instead of hanging until the timeout.
+    child.on("close", () => { clearTimeout(timer); done(reject, new Error("listen stopped")); });
   });
 }
 

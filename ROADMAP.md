@@ -29,6 +29,20 @@ via OpenCode model list, no new keys). Local long-term memory.
 - [ ] Test-command detection per project, fed to followups
 - [ ] Split main.js IPC handlers and the deck into modules
 
+- [x] Parakeet live engine on Apple Silicon (M5 Pro): real binary, 16 kHz resample,
+  energy VAD + silence commit, rolling partials; default engine when built
+  (`npm run prove:parakeet` runs real speech through the live path)
+
+- [x] Jarvis's voice: Kokoro-82M on device (`jarvis-voice`), one fixed voice
+  (`set.voice`, default bm_george), audio-driven core animation; pinned system
+  voice fallback on Intel
+
+- [x] Jarvis acts on its own deck: live deck state in the brain prompt, validated
+  `jarvis` action fence (settings, cleanup/stop/remove/follow-up workers,
+  land/keep/discard, project, hush); machine checks always delegated; spoken
+  permission prompts answered by voice
+
 Still open: LLM fact extraction for memory (extractCandidates is still
-heuristic regex today), M5 live-mic verification (binary drop-in proven on
-Intel only; 16 kHz resample / VAD tuning notes in helper.swift unverified).
+heuristic regex today), VAD threshold tuning against a real room mic (proven
+on synthesized speech; tune via `JARVIS_PARAKEET_*` env), keep the parakeet
+process warm across utterances instead of one spawn per utterance.

@@ -4,17 +4,20 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
-import { loadStore, applyAppCommand, ACCENTS } from "./shell.js";
-import { brainRespond, brainReview, setBrainModel } from "./brain/brain.js";
+import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
+import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
+import { stateBlock, resolveRef } from "./actions.js";
+import { brainRespond, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
 import { collectWorkerReport, reportHeadline } from "./brain/report.js";
 import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChain, discardChain } from "./worktrees.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
-import { isVoiceMode, nextVoiceAction, stripWake } from "./voice.js";
-import { speechFor, voiceGate, isHush } from "./speech.js";
-import { ensureFleetOrAsk, startCreate, answerCreate, pendingBootstraps } from "./bootstrap.js";
+import { isVoiceMode, nextVoiceAction, stripWake, createConversation, followUpMs } from "./voice.js";
+import { speechFor, voiceGate, isHush, permissionLine } from "./speech.js";
+import { synthesize, warmVoice, stopVoice, hasNeuralVoice } from "./tts.js";
+import { ensureFleetOrAsk, startCreate, startCreateWithPurpose, answerCreate, pendingBootstraps } from "./bootstrap.js";
+import { loadMemory, loadProjectMemory, remember as rememberFact, forget as forgetFact, matchFacts } from "./brain/memory.js";
 import { parseExplicitAgent, resolveAgent, getFleetRegistry } from "./autoroute.js";
 import { projectDir, projectName, recentProjects, setProject, matchProjectCommand } from "./project.js";
 
@@ -55,22 +58,91 @@ async function answerPending(decision) {
   return { requestID, decision, r };
 }
 
-// Spoken replies (voice mode only). The deck does the text-to-speech and
-// reports when it is talking, so the voice loop can ignore Jarvis's own voice.
+// Spoken replies (voice mode only). Main renders the line in Jarvis's one
+// fixed voice (tts.js); the deck plays it and reports when it is talking, so
+// the voice loop can ignore Jarvis's own voice.
 let speakingNow = false;
 let speakingTailUntil = 0;
 const isSpeaking = () => speakingNow || Date.now() < speakingTailUntil;
 function setSpeaking(on) {
   speakingNow = !!on;
   if (!on) speakingTailUntil = Date.now() + 700;
+  // Jarvis talking keeps the conversation open; the countdown starts when it stops.
+  if (on) convo.hold("speaking");
+  else convo.release("speaking", followUpMs(shellStore().settings.followUp));
+  paintConversation();
+  // The loop's current listen has been hearing Jarvis; once it stops, start a
+  // fresh one so a follow-up never begins with Jarvis's own words.
+  if (!on && loopListening) {
+    setTimeout(() => { if (loopListening && !speakingNow) stopListening(); }, 250);
+  }
 }
-function speak(win, text) {
+let loopListening = false;
+
+// Conversation window: "hey jarvis" once, then just talk. Stays open while
+// Jarvis thinks or speaks and for settings.followUp seconds after.
+const convo = createConversation();
+let convoTimer = null;
+let convoWin = null;
+let convoShown = null;
+function paintConversation(win = convoWin) {
+  convoWin = win ?? convoWin;
+  clearTimeout(convoTimer);
+  const ms = convo.remainingMs();
+  const open = ms > 0;
+  if (open !== convoShown) {
+    convoShown = open;
+    convoWin?.webContents.send("voice.conversation", { open });
+  }
+  if (open && Number.isFinite(ms)) convoTimer = setTimeout(() => paintConversation(), ms + 50);
+}
+let speakToken = 0;
+async function speak(win, text) {
   const t = String(text ?? "").trim();
   if (!t || !isVoiceMode(shellStore())) return;
-  win?.webContents.send("jarvis.speak", { text: t });
+  const my = ++speakToken;
+  const voice = shellStore().settings.voice;
+  let rendered = null;
+  try {
+    rendered = await synthesize(t, voice);
+  } catch (err) {
+    console.warn(`[voice] ${err.message ?? err}; deck falls back to the system voice`);
+  }
+  // A hush, a newer line or voice-off while rendering wins.
+  if (my !== speakToken || !isVoiceMode(shellStore())) return;
+  win?.webContents.send("jarvis.speak", { text: t, voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0 });
 }
 function hush(win) {
+  speakToken++;
   win?.webContents.send("jarvis.speak.stop", {});
+}
+// Keep the voice model warm while voice mode is on; re-warm on a voice change.
+function onVoiceSettings(name, value) {
+  const s = shellStore().settings;
+  if (name === "set.voice" && s.voiceMode === "on") warmVoice(value)?.catch(() => {});
+  if (name === "set.voiceMode") {
+    if (value === "on") warmVoice(s.voice)?.catch(() => {});
+    else stopVoice();
+  }
+}
+
+// A worker needs approval: in voice mode Jarvis says what it wants and keeps
+// listening, so a plain "yes" / "no" answers it (the card works too). The
+// conversation stays open until every pending request is answered.
+function askPermissionAloud(request) {
+  if (!isVoiceMode(shellStore())) return;
+  const agent = workers.get(request?.sessionID)?.agent ?? "";
+  convo.open(Math.max(followUpMs(shellStore().settings.followUp), 60000));
+  convo.hold("permission");
+  paintConversation(win);
+  speak(win, permissionLine(request, agent));
+}
+function permissionSettled() {
+  if (pendingPermissions.size > 0) return;
+  const followUp = followUpMs(shellStore().settings.followUp);
+  convo.release("permission", followUp);
+  if (!followUp) convo.close();
+  paintConversation(win);
 }
 
 // Voice loop: mic stays open while shell voiceMode is on. Wake-gated tasks feed
@@ -86,14 +158,19 @@ async function voiceLoop(commitText, win) {
       if (voiceSuspend || isListening()) { await sleep(500); continue; }
       let fin;
       try {
+        loopListening = true;
         fin = await listenOnce({ onPartial: (p) => win?.webContents.send("caption.partial", p) });
         failures = 0;
       } catch (err) {
+        // Nobody spoke for a whole listen window, or the listen was restarted: listen again.
+        if (/^listen (timeout|stopped)$/.test(String(err.message ?? err))) continue;
         // Back off on repeated spawn failures (e.g. mic denied) instead of hot-looping.
         failures += 1;
         win?.webContents.send("audio.error", { message: String(err.message ?? err) });
         await sleep(Math.min(30000, 1500 * 2 ** Math.min(failures, 4)));
         continue;
+      } finally {
+        loopListening = false;
       }
       const s = shellStore().settings;
       // While Jarvis talks the mic hears it too: drop that, but let an
@@ -104,18 +181,180 @@ async function voiceLoop(commitText, win) {
         hush(win);
         if (isHush(stripWake(fin.text, s.wake))) continue;
       }
-      const next = nextVoiceAction(fin.text, { voiceMode: s.voiceMode, wakeWord: s.wake });
-      if (next.action === "wake-task") {
+      const followUp = followUpMs(s.followUp);
+      const answering = pendingPermissions.size > 0 || pendingConfigs.size > 0;
+      const next = nextVoiceAction(fin.text, { voiceMode: s.voiceMode, wakeWord: s.wake, inConversation: convo.isOpen(), answering });
+      if (next.action === "wake-task" || next.action === "follow-up") {
+        if (next.action === "wake-task") convo.open(followUp);
         const utterance = toUtterance(fin);
         win?.webContents.send("caption.final", { id: utterance.id, text: utterance.text });
+        convo.hold("turn");
+        paintConversation(win);
         try { await commitText(next.text); } catch (err) { console.error("voice commit failed:", err.message ?? err); }
-        finally { win?.webContents.send("utterance.settled", { id: utterance.id }); }
+        finally {
+          convo.release("turn", followUp);
+          paintConversation(win);
+          win?.webContents.send("utterance.settled", { id: utterance.id });
+        }
       } else if (next.action === "wake-empty") {
-        win?.webContents.send("caption.partial", { id: fin.id, text: `heard ${s.wake} — say a command`, revision: 0 });
+        const opened = convo.open(followUp);
+        paintConversation(win);
+        win?.webContents.send("caption.partial", { id: fin.id, text: opened ? "go ahead, I'm listening" : `heard ${s.wake} — say a command`, revision: 0 });
+        if (opened) speak(win, "Yes?");
+      } else if (next.action === "dismiss") {
+        convo.close();
+        paintConversation(win);
+        speak(win, `Okay. Say hey ${s.wake} when you need me.`);
+      } else if (next.action === "ack") {
+        convo.touch(followUp);
+        paintConversation(win);
       }
     }
   } finally {
     voiceRunning = false;
+  }
+}
+
+// "Clean up the completed and failed workers": Jarvis's own housekeeping, done
+// here (no worker, no model). Running or waiting workers are never touched.
+async function runFleetCleanup(states, { quiet = false } = {}) {
+  const r = await cleanupWorkers(states);
+  win?.webContents.send("fleet.state", { kind: "fleet.state", snapshot: snapshot() });
+  const kinds = states.map((s) => ({ done: "completed", failed: "failed", stopped: "stopped" }[s])).join(" or ");
+  const n = r.removed.length;
+  const line = n ? `Removed ${n} ${kinds} worker${n === 1 ? "" : "s"}.` : `There are no ${kinds} workers to clean up.`;
+  win?.webContents.send("session.stream", { delta: `\n[fleet] ${line}${r.errors.length ? ` Failed: ${r.errors.join("; ")}` : ""}\n` });
+  if (!quiet) speak(win, line);
+  return { ...r, line };
+}
+
+let commitTextRef = null; // set once the IPC layer defines commitText
+
+// What the brain is shown about the deck each turn (actions.js stateBlock).
+function jarvisContext() {
+  try {
+    return stateBlock({
+      workers: snapshot().map((w) => ({ ...w, sessionID: w.id })),
+      chains: [...chains.values()],
+      settings: shellStore().settings,
+      projects: recentProjects(),
+      pendingPermissions: pendingPermissions.size,
+    });
+  } catch (err) {
+    return `(deck state unavailable: ${String(err.message ?? err).slice(0, 80)})`;
+  }
+}
+
+// Execute one validated ```jarvis``` action from the brain. The brain only
+// asks; everything is checked again here, and the outcome is written to the
+// transcript (and spoken if it failed, since the brain already said "done").
+async function runJarvisAction(a, broadcast) {
+  const note = (line) => win?.webContents.send("session.stream", { delta: `\n[jarvis] ${line}\n` });
+  const fail = (why) => {
+    note(`couldn't ${a.action}: ${why}`);
+    speak(win, `Sorry, I couldn't do that: ${why}.`);
+    return { ok: false, reason: why };
+  };
+  const worker = () => resolveRef(a.worker, workers.keys());
+  try {
+    switch (a.action) {
+      case "set": {
+        const name = `set.${a.setting}`;
+        if (name === "set.jarvisModel") {
+          const slash = a.value.indexOf("/");
+          if (slash < 0) return fail("a model is provider/id");
+          await setBrainModel(a.value.slice(0, slash), a.value.slice(slash + 1));
+        }
+        const entry = applyAppCommand(shellStore(), name, { value: a.value });
+        broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+        onVoiceSettings(name, a.value);
+        if (name === "set.voiceMode") {
+          if (a.value === "on" && commitTextRef) voiceLoop(commitTextRef, win);
+          else { stopListening(); hush(win); convo.close(); paintConversation(win); }
+        }
+        note(`${a.setting} → ${a.value}`);
+        return { ok: true };
+      }
+      case "cleanup":
+        return { ok: true, ...(await runFleetCleanup(a.states, { quiet: true })) };
+      case "stop": {
+        const id = worker();
+        if (!id) return fail(`no single worker matches ${a.worker}`);
+        await stopWorker(id);
+        broadcast({ kind: "fleet.state", snapshot: snapshot() });
+        note(`stopped worker ${id.slice(0, 8)}`);
+        return { ok: true };
+      }
+      case "remove": {
+        const id = worker();
+        if (!id) return fail(`no single worker matches ${a.worker}`);
+        if (["working", "permission"].includes(workers.get(id)?.state)) return fail("that worker is still running; stop it first");
+        await deleteWorker(id);
+        broadcast({ kind: "fleet.state", snapshot: snapshot() });
+        note(`removed worker ${id.slice(0, 8)}`);
+        return { ok: true };
+      }
+      case "followup": {
+        const id = worker();
+        if (!id) return fail(`no single worker matches ${a.worker}`);
+        if (["working", "permission"].includes(workers.get(id)?.state)) return fail("that worker is still busy");
+        await followUpWorker(id, a.task);
+        broadcast({ kind: "fleet.state", snapshot: snapshot() });
+        note(`follow-up → ${id.slice(0, 8)}: ${a.task.slice(0, 80)}`);
+        return { ok: true };
+      }
+      case "land":
+      case "keep":
+      case "discard": {
+        const chainID = a.chain ? resolveRef(a.chain, chains.keys()) : null;
+        if (a.chain && !chainID) return fail(`no single branch matches ${a.chain}`);
+        const r = await chainAction(a.action, chainID, broadcast);
+        if (!r.ok) return fail(r.reason);
+        note({ land: `landed ${r.branch} into ${r.base}`, keep: `kept branch ${r.branch}`, discard: `discarded ${r.branch}` }[a.action]);
+        return r;
+      }
+      case "project": {
+        const want = a.name.toLowerCase();
+        const hits = recentProjects().filter((p) => p.name.toLowerCase() === want || p.dir === a.name);
+        const loose = hits.length ? hits : recentProjects().filter((p) => p.name.toLowerCase().includes(want));
+        if (loose.length !== 1) return fail(loose.length ? `"${a.name}" matches several projects` : `no recent project called ${a.name}`);
+        await switchProject(loose[0].dir, broadcast);
+        note(`now working in ${loose[0].name}`);
+        return { ok: true };
+      }
+      case "hush":
+        hush(win);
+        return { ok: true };
+      case "remember": {
+        const mem = a.scope === "project" ? loadProjectMemory() : loadMemory();
+        const f = rememberFact(mem, a.fact, ["asked"]);
+        note(f ? `remembered${a.scope === "project" ? " for this project" : ""}: ${a.fact}` : `already remembered: ${a.fact}`);
+        return { ok: true };
+      }
+      case "forget": {
+        const mem = a.scope === "project" ? loadProjectMemory() : loadMemory();
+        const hits = matchFacts(mem, a.fact);
+        if (!hits.length) return fail(`nothing remembered matches "${a.fact}"`);
+        if (hits.length > 1) return fail(`${hits.length} memories match "${a.fact}"; be more specific`);
+        forgetFact(mem, hits[0].id);
+        note(`forgot: ${hits[0].text}`);
+        return { ok: true };
+      }
+      case "agent": {
+        const directory = projectDir();
+        const ctx = await buildBootstrapCtx(directory);
+        const id = `boot_${Date.now().toString(36)}`;
+        const first = await startCreateWithPurpose(a.purpose, ctx, [], a.name);
+        if (first.stage === "purpose") return fail(first.prompt);
+        bootStash.set(id, { task: null, directory, gate: false, conv: first.conv, ctx });
+        broadcast({ kind: "bootstrap.ask", id, stage: first.stage, prompt: first.prompt, options: first.options });
+        note(`creating agent ${first.conv.name}: answer on the card`);
+        return { ok: true };
+      }
+    }
+    return fail("unknown action");
+  } catch (err) {
+    return fail(String(err.message ?? err).slice(0, 120));
   }
 }
 
@@ -192,6 +431,12 @@ async function answerBootstrapText(id, text, win, broadcast) {
   const r = await answerCreate(entry.conv, text, entry.ctx);
   if (r.stage === "done") {
     bootStash.delete(id);
+    // Created on request without a task (Jarvis "agent" action): nothing to run yet.
+    if (!entry.task) {
+      broadcast({ kind: "bootstrap.done", id, name: r.name, note: r.note, sessionID: null });
+      speak(win, `${r.name} is ready. Give it a task whenever you like.`);
+      return { id, stage: "done", name: r.name, sessionID: null };
+    }
     const spawned = await spawnWorker(entry.task, { agent: r.name, directory: entry.directory });
     broadcast({ kind: "fleet.state", snapshot: snapshot() });
     broadcast({ kind: "bootstrap.done", id, name: r.name, note: r.note, sessionID: spawned.sessionID });
@@ -310,14 +555,22 @@ async function createWindow() {
   await win.loadFile(path.join(here, "../../deck/index.html"));
 }
 
+app.on("will-quit", () => stopVoice());
+
 app.whenReady().then(async () => {
+  if (isVoiceMode(shellStore())) warmVoice(shellStore().settings.voice)?.catch(() => {});
   await ensureClient();
   setProject(projectDir());
   await loadProject(projectDir());
   const broadcast = (msg) => win?.webContents.send(msg.kind, msg);
   await ensureFleetPump((ev) => {
-    if (ev.kind === "permission.waiting") broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
-    else if (ev.kind === "permission.resolved") broadcast({ kind: "permission.resolved", ...ev });
+    if (ev.kind === "permission.waiting") {
+      broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
+      askPermissionAloud(ev.request);
+    } else if (ev.kind === "permission.resolved") {
+      broadcast({ kind: "permission.resolved", ...ev });
+      permissionSettled();
+    }
     else if (ev.kind === "worker.tool") broadcast({ kind: "session.tool", ...ev });
     else if (ev.kind === "worker.stream") broadcast({ kind: "worker.stream", ...ev });
     else if (ev.kind === "form.waiting") broadcast({ kind: "form.waiting", ...ev });
@@ -388,6 +641,11 @@ app.whenReady().then(async () => {
       win?.webContents.send("session.done", { status: r.ok ? "ok" : "failed" });
       return { ok: r.ok, control: "chain.action", ...r };
     }
+    if (routed.route === "fleet.cleanup") {
+      const r = await runFleetCleanup(routed.states);
+      win?.webContents.send("session.done", { status: "ok" });
+      return { ok: true, control: "fleet.cleanup", ...r };
+    }
     if (routed.route === "stop-worker") {
       const w = latestActiveWorker();
       if (!w) return { ok: false, control: "stop-worker", reason: "no active worker" };
@@ -399,15 +657,17 @@ app.whenReady().then(async () => {
       // Shell bucket: applied next frame, persisted, no model call.
       const entry = applyAppCommand(shellStore(), routed.name, routed.args);
       broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+      onVoiceSettings(routed.name, routed.args?.value);
+      if (routed.name === "set.voice") speak(win, "This is my voice now.");
       if (routed.name === "set.voiceMode") {
         if (routed.args?.value === "on") voiceLoop(commitText, win);
-        else { stopListening(); hush(win); }
+        else { stopListening(); hush(win); convo.close(); paintConversation(win); }
       }
       return { ok: true, control: "app.command", entry };
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }, { voice: isVoiceMode(shellStore()) }).catch(async (err) => {
+    }, { voice: isVoiceMode(shellStore()), context: jarvisContext() }).catch(async (err) => {
       // Brain fallback: direct read-only turn if the graph path fails. Loud,
       // so a broken brain never hides behind a working fallback.
       console.error("brain failed, falling back to direct turn:", err?.message ?? err);
@@ -417,12 +677,24 @@ app.whenReady().then(async () => {
       }, files?.length ? { files } : {});
     });
     win?.webContents.send("session.done", { sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status });
+    // The brain is read-only; if it says it can't run that instead of
+    // delegating, give the request to a worker (which has the shell).
+    if (r.status === "ok" && needsWorkerFallback(r.reply ?? r.text, r.dispatches)) {
+      r.dispatches = [{ task: `The user asked: "${text}". Do this on the user's machine with your tools (you have shell access; risky commands will be put to the user for approval) and report the result in one or two sentences.` }];
+      r.speak = "I'll have a worker check that on your machine.";
+      win?.webContents.send("session.stream", { delta: "\n[act] no shell in the brain session — handing this to a worker\n" });
+    }
     if (r.status === "ok") speak(win, r.speak ?? speechFor(r.reply ?? r.text ?? ""));
     else if (isVoiceMode(shellStore())) speak(win, "Sorry, that didn't work. The details are in the transcript.");
     const dispatched = [];
     for (const w of r.warnings ?? []) {
       win?.webContents.send("session.stream", { delta: `\n[act] ${w}\n` });
     }
+    // The brain's reply already claimed it; a rejected action must be corrected out loud.
+    if ((r.warnings ?? []).some((w) => w.startsWith("ignoring jarvis action"))) {
+      speak(win, "Sorry, I couldn't apply that one. The details are in the transcript.");
+    }
+    for (const a of r.actions ?? []) await runJarvisAction(a, broadcast);
     for (const d of r.dispatches ?? []) {
       const dr = await dispatchTask(d.task, { agent: d.agent }, broadcast);
       if (dr.needBootstrap) {
@@ -436,6 +708,7 @@ app.whenReady().then(async () => {
     }
     return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0, dispatches: dispatched };
   };
+  commitTextRef = commitText;
   ipcMain.handle("utterance.commit", async (_e, utterance, extra = {}) => {
     if (!utterance?.text || typeof utterance.text !== "string") {
       throw new Error("utterance.text required");
@@ -488,8 +761,9 @@ app.whenReady().then(async () => {
       const r = await commitText(utterance.text);
       return { ok: true, utterance, ...r };
     } catch (err) {
-      win?.webContents.send("audio.error", { message: String(err.message ?? err) });
-      return { ok: false, reason: String(err.message ?? err) };
+      const reason = String(err.message ?? err);
+      if (reason !== "listen stopped") win?.webContents.send("audio.error", { message: reason });
+      return { ok: false, reason };
     } finally {
       voiceSuspend = false;
     }
@@ -614,11 +888,12 @@ app.whenReady().then(async () => {
     }
     const entry = applyAppCommand(shellStore(), name, args);
     broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+    onVoiceSettings(name, args?.value);
     // The deck's voice button goes through here: it must start/stop the loop
     // exactly like the spoken "voice mode on/off" does.
     if (name === "set.voiceMode") {
       if (args?.value === "on") voiceLoop(commitText, win);
-      else { stopListening(); hush(win); }
+      else { stopListening(); hush(win); convo.close(); paintConversation(win); }
     }
     return { ok: true, entry };
   });
@@ -631,7 +906,64 @@ app.whenReady().then(async () => {
     settings: shellStore().settings,
     audit: shellStore().audit,
     accents: ACCENTS,
+    voices: VOICES.map((id) => ({ id, label: VOICE_LABELS[id] ?? id })),
+    followUps: FOLLOW_UPS,
+    neuralVoice: hasNeuralVoice(),
+    conversation: convo.isOpen(),
   }));
+  // First-run setup: the deck's wizard collects name, brain model, worker model
+  // and voice, then saves them here in one go. Everything is validated first
+  // (the brain model against the live server) so a bad answer saves nothing.
+  ipcMain.handle("onboarding.complete", async (_e, answers = {}) => {
+    const plan = [
+      ["set.userName", "name", String(answers.name ?? "").trim()],
+      ["set.jarvisModel", "jarvisModel", String(answers.jarvisModel ?? "")],
+      ["set.workerModel", "workerModel", String(answers.workerModel ?? "")],
+      ["set.voice", "voice", String(answers.voice ?? "")],
+    ];
+    const errors = {};
+    for (const [name, field, value] of plan) {
+      try { validateAppCommand(name, { value }); } catch (err) { errors[field] = String(err.message ?? err); }
+    }
+    if (!errors.jarvisModel) {
+      const m = plan[1][2];
+      const slash = m.indexOf("/");
+      try { await setBrainModel(m.slice(0, slash), m.slice(slash + 1)); }
+      catch (err) { errors.jarvisModel = String(err.message ?? err); }
+    }
+    if (Object.keys(errors).length) return { ok: false, errors };
+    for (const [name, , value] of [...plan, ["set.onboarded", "", "on"]]) {
+      const entry = applyAppCommand(shellStore(), name, { value });
+      broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
+      onVoiceSettings(name, value);
+    }
+    return { ok: true, settings: shellStore().settings };
+  });
+  // Jarvis speaking outside voice mode (setup wizard): one line, in a given
+  // voice (default: the configured one). Returns WAV bytes for the deck to play.
+  ipcMain.handle("voice.say", async (_e, { text, voice } = {}) => {
+    const t = String(text ?? "").trim().slice(0, 400);
+    const v = VOICES.includes(voice) ? voice : shellStore().settings.voice;
+    if (!t) return { ok: false, reason: "empty" };
+    try {
+      const r = await synthesize(t, v);
+      return r ? { ok: true, text: t, audio: r.audio, ms: r.ms } : { ok: false, text: t, reason: "no neural voice on this Mac" };
+    } catch (err) {
+      return { ok: false, text: t, reason: String(err.message ?? err) };
+    }
+  });
+  // Settings → Voice: hear a voice before (or after) choosing it. Works with
+  // voice mode off; renders through the same helper Jarvis speaks with.
+  ipcMain.handle("voice.preview", async (_e, { voice } = {}) => {
+    const v = VOICES.includes(voice) ? voice : shellStore().settings.voice;
+    const line = `Hello, I'm Jarvis. ${VOICE_LABELS[v]?.split(" — ")[0] ?? "This"} is how I sound. What shall we build today?`;
+    try {
+      const r = await synthesize(line, v);
+      return r ? { ok: true, text: line, audio: r.audio, ms: r.ms } : { ok: false, text: line, reason: "no neural voice on this Mac" };
+    } catch (err) {
+      return { ok: false, text: line, reason: String(err.message ?? err) };
+    }
+  });
   ipcMain.handle("dialog.attach", async () => {
     const r = await dialog.showOpenDialog(win, { properties: ["openFile"], title: "Attach file to next message" });
     if (r.canceled || !r.filePaths.length) return { ok: false };

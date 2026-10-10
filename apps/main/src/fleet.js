@@ -481,6 +481,39 @@ export function latestSettledChain() {
   return null;
 }
 
+// Fleet housekeeping: "clean up the completed and failed workers".
+export const FINISHED_STATES = ["done", "failed", "stopped"];
+export function matchFleetCommand(text) {
+  const t = String(text ?? "").toLowerCase().replace(/[.!?,]+/g, " ").replace(/\s+/g, " ").trim();
+  const m = t.match(/^(?:please )?(?:clean ?up|clear(?: out)?|remove|delete|get rid of|tidy(?: up)?|prune)(?: all)?(?: of)?(?: the| my)?(?: (.+?))? (?:workers?|agents?|sessions?|fleet|ring)(?: from the (?:fleet|ring))?(?: please)?$/);
+  if (!m) return null;
+  const words = m[1] ?? "";
+  if (/\b(?:running|working|active|busy)\b/.test(words)) return null; // never by phrase
+  const states = new Set();
+  if (/\b(?:completed?|finished|done|successful)\b/.test(words)) states.add("done");
+  if (/\b(?:failed|failing|errored|broken|dead)\b/.test(words)) states.add("failed");
+  if (/\b(?:stopped|cancel+ed|aborted)\b/.test(words)) states.add("stopped");
+  if (/\b(?:old|idle|finished)\b/.test(words) || !states.size) FINISHED_STATES.forEach((s) => states.add(s));
+  return { states: FINISHED_STATES.filter((s) => states.has(s)) };
+}
+
+// Which workers a cleanup removes: only finished ones, in this project.
+export function cleanupTargets(list, states, dir) {
+  const want = new Set((states ?? []).filter((s) => FINISHED_STATES.includes(s)));
+  return list.filter((w) => want.has(w.state) && (!dir || !w.project || w.project === dir)).map((w) => w.sessionID);
+}
+
+export async function cleanupWorkers(states, dir = projectDir()) {
+  const ids = cleanupTargets([...workers.values()], states, dir);
+  const removed = [];
+  const errors = [];
+  for (const id of ids) {
+    try { await deleteWorker(id); removed.push(id); }
+    catch (err) { errors.push(`${id.slice(0, 8)}: ${String(err.message ?? err).slice(0, 80)}`); }
+  }
+  return { removed, errors };
+}
+
 export function chainBusy(chainID) {
   return [...workers.values()].some((x) => x.chain === chainID && ["working", "permission"].includes(x.state));
 }
@@ -492,10 +525,15 @@ export function latestActiveWorker() {
 
 // Pure routing: control phrase vs model prompt. Main decides; flaky transcripts cannot eval.
 export function routeUtterance(text, hasPending = pendingPermissions.size > 0, hasConfigPending = pendingConfigs.size > 0, formAnswer = null) {
-  const t = String(text ?? "").trim().toLowerCase();
+  // Speech engines punctuate ("Use the amber accent.", "Allow."); local
+  // commands match on the bare words.
+  text = String(text ?? "").trim().replace(/[.!?…]+$/, "").trim();
+  const t = text.toLowerCase();
   if (hasPending) {
-    if (/^(allow|yes|approve|grant)(\s+once)?$/.test(t)) return { route: "permission", decision: "allow" };
-    if (/^(deny|no|reject|block)$/.test(t)) return { route: "permission", decision: "deny" };
+    // Spoken answers to "the worker wants to run X — allow it?"
+    const said = t.replace(/[,!]/g, " ").replace(/\s+/g, " ").trim();
+    if (/^(?:(?:yes|yeah|yep|sure|ok|okay|allow|approve|grant|go ahead|do it|run it|fine)(?: (?:it|that|once|please|go ahead|do it|run it|allow it|jarvis))*)$/.test(said)) return { route: "permission", decision: "allow" };
+    if (/^(?:(?:no|nope|deny|reject|block|don't|do not|cancel|decline)(?: (?:it|that|please|don't|do it|run it|allow it|jarvis))*)$/.test(said)) return { route: "permission", decision: "deny" };
   }
   if (formAnswer) return { route: "form.answer", answer: formAnswer };
   if (hasConfigPending) {
@@ -508,6 +546,8 @@ export function routeUtterance(text, hasPending = pendingPermissions.size > 0, h
   if (cfg && !isWidening(cfg)) return { route: "config.apply", spec: cfg };
   if (cfg && isWidening(cfg)) return { route: "config.stage", spec: cfg };
   if (/^stop( the)? worker$/.test(t)) return { route: "stop-worker" };
+  const fleetCmd = matchFleetCommand(text);
+  if (fleetCmd) return { route: "fleet.cleanup", ...fleetCmd };
   let m;
   if ((m = t.match(/^(land|merge|keep|discard)( it| the work| the changes| the branch)?$/))) {
     return { route: "chain.action", action: m[1] === "merge" ? "land" : m[1] };

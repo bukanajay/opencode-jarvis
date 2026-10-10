@@ -69,3 +69,11 @@ test("matchAppCommand: isolation and review mode", () => {
   assert.deepEqual(matchAppCommand("set isolation to worktree"), { name: "set.isolation", args: { value: "worktree" } });
   assert.deepEqual(matchAppCommand("turn review mode off"), { name: "set.reviewMode", args: { value: "off" } });
 });
+
+test("routeUtterance: spoken punctuation does not break local commands", () => {
+  assert.equal(routeUtterance("Use the amber accent.", false, false).name, "set.accent");
+  assert.deepEqual(routeUtterance("Allow.", true, false), { route: "permission", decision: "allow" });
+  assert.deepEqual(routeUtterance("No!", true, false), { route: "permission", decision: "deny" });
+  assert.equal(routeUtterance("Stop the worker.", false, false).route, "stop-worker");
+  assert.equal(routeUtterance("Why is the build failing?", false, false).route, "prompt");
+});

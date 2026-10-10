@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -13,6 +13,24 @@ export const ACCENTS = {
   ember: "#ff6b4a",
   dim: "#3a4543",
 };
+// Jarvis's speaking voice: Kokoro English voice ids (jarvis-voice helper).
+// b = British, a = American; m = male, f = female.
+export const VOICES = [
+  "bm_george", "bm_fable", "bm_lewis", "bm_daniel",
+  "am_michael", "am_onyx", "am_fenrir", "am_puck", "am_adam", "am_echo", "am_eric", "am_liam",
+  "bf_emma", "bf_isabella", "bf_alice", "bf_lily",
+  "af_heart", "af_bella", "af_nicole", "af_sarah", "af_nova", "af_sky",
+];
+export const VOICE_LABELS = {
+  bm_george: "George — British, male", bm_fable: "Fable — British, male", bm_lewis: "Lewis — British, male", bm_daniel: "Daniel — British, male",
+  am_michael: "Michael — American, male", am_onyx: "Onyx — American, male", am_fenrir: "Fenrir — American, male", am_puck: "Puck — American, male",
+  am_adam: "Adam — American, male", am_echo: "Echo — American, male", am_eric: "Eric — American, male", am_liam: "Liam — American, male",
+  bf_emma: "Emma — British, female", bf_isabella: "Isabella — British, female", bf_alice: "Alice — British, female", bf_lily: "Lily — British, female",
+  af_heart: "Heart — American, female", af_bella: "Bella — American, female", af_nicole: "Nicole — American, female",
+  af_sarah: "Sarah — American, female", af_nova: "Nova — American, female", af_sky: "Sky — American, female",
+};
+// Conversation follow-up window after "hey jarvis", in seconds; off = always need the wake word.
+export const FOLLOW_UPS = ["off", "15", "30", "60", "120"];
 export const DENSITIES = ["comfortable", "compact"];
 export const LAYOUTS = ["deck", "wide"];
 export const CAPTION_SIZES = ["small", "medium", "large"];
@@ -31,6 +49,10 @@ export const DEFAULTS = {
   defaultAgent: "build",
   jarvisModel: "opencode-go/gpt-6-luna",
   workerModel: "opencode/fledge-alpha-free",
+  voice: "bm_george",
+  followUp: "30",
+  userName: "",
+  onboarded: "off", // first-run setup wizard done
 };
 
 export function storePath() {
@@ -72,9 +94,15 @@ const KEY_OF = {
   "set.defaultAgent": "defaultAgent",
   "set.jarvisModel": "jarvisModel",
   "set.workerModel": "workerModel",
+  "set.voice": "voice",
+  "set.followUp": "followUp",
+  "set.userName": "userName",
+  "set.onboarded": "onboarded",
 };
 export const ON_OFF = ["on", "off"];
 export const ISOLATIONS = ["worktree", "shared"];
+
+export const validateAppCommand = (name, args) => validate(name, args);
 
 function validate(name, args) {
   if (!ALLOWLIST.includes(name)) throw new Error(`not allowlisted: ${name}`);
@@ -101,6 +129,18 @@ function validate(name, args) {
     case "set.autoMode":
     case "set.reviewMode":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.voice":
+      if (!VOICES.includes(value)) throw new Error(`unknown voice: ${value} (known: ${VOICES.join(", ")})`);
+      break;
+    case "set.userName":
+      if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,47}$/u.test(value)) throw new Error(`${name}: letters, spaces, . ' - only (max 48)`);
+      break;
+    case "set.onboarded":
+      if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.followUp":
+      if (!FOLLOW_UPS.includes(value)) throw new Error(`${name}: want ${FOLLOW_UPS.join("|")}`);
       break;
     case "set.isolation":
       if (!ISOLATIONS.includes(value)) throw new Error(`${name}: want worktree|shared`);
@@ -169,6 +209,26 @@ export function matchAppCommand(text) {
   }
   if ((m = t.match(/^(?:turn |set )?review mode (on|off)$/))) {
     return { name: "set.reviewMode", args: { value: m[1] } };
+  }
+  // "use the george voice", "set voice to fable", "set voice to bm_lewis"
+  if ((m = t.match(/^(?:use(?: the)? ([a-z_]+) voice|set(?: the)? voice to ([a-z_]+))$/))) {
+    const want = m[1] ?? m[2];
+    const id = VOICES.find((v) => v === want) ?? VOICES.find((v) => v.split("_")[1] === want);
+    if (id) return { name: "set.voice", args: { value: id } };
+  }
+  // "call me Ajay", "my name is Ajay": the name Jarvis uses for the user.
+  if ((m = String(text ?? "").trim().replace(/[.!]+$/, "").match(/^(?:call me|my name is) ([\p{L}][\p{L}\p{M} .'-]{0,47})$/iu))) {
+    return { name: "set.userName", args: { value: m[1].trim() } };
+  }
+  // Conversation window: "turn conversation mode off", "set follow up to 60 seconds",
+  // "keep listening for 2 minutes".
+  if ((m = t.match(/^(?:turn |set )?conversation mode (on|off)$/))) {
+    return { name: "set.followUp", args: { value: m[1] === "on" ? "30" : "off" } };
+  }
+  if ((m = t.match(/^(?:set (?:the )?follow ?up (?:window )?to|keep listening for) (\d+|one|two) (seconds?|minutes?)$/))) {
+    const n = { one: 1, two: 2 }[m[1]] ?? Number(m[1]);
+    const secs = String(m[2].startsWith("minute") ? n * 60 : n);
+    if (FOLLOW_UPS.includes(secs)) return { name: "set.followUp", args: { value: secs } };
   }
   if ((m = t.match(/^set isolation to (worktree|shared)$/))) {
     return { name: "set.isolation", args: { value: m[1] } };

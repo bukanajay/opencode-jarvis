@@ -74,6 +74,16 @@ export function voiceGate(transcript, { speaking, wakeWord = "jarvis" } = {}) {
   return explicit && stripWake(t, wake) !== t.trim() ? "barge" : "drop";
 }
 
+// What Jarvis says when a worker needs approval: who, what, and the question.
+export function permissionLine(request, agent = "") {
+  const action = String(request?.action ?? "something").toLowerCase();
+  const what = (request?.resources ?? []).map(String).filter(Boolean).join(", ").replace(/\s+/g, " ").trim();
+  const short = what.length > 90 ? `${what.slice(0, 87)}…` : what;
+  const who = agent ? `The ${agent} worker` : "A worker";
+  const verb = /bash|shell|command|exec/.test(action) ? "run" : /edit|write|patch/.test(action) ? "edit" : /web|fetch/.test(action) ? "fetch" : `use ${action} on`;
+  return short ? `${who} wants to ${verb} ${short}. Allow it?` : `${who} needs ${action} permission. Allow it?`;
+}
+
 // "hey jarvis stop" / "quiet" / "shut up" while speaking: stop, nothing else.
 export function isHush(text) {
   return /^(stop|quiet|silence|shut up|be quiet|enough|cancel|never ?mind)[.!]?$/i.test(String(text ?? "").trim());
