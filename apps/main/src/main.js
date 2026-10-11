@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, clipboard, shell as electronShell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
@@ -12,6 +12,8 @@ import { createPresence, wireWindow, startHidden } from "./presence.js";
 import { isBriefRequest } from "./brief.js";
 import { inboxSummary } from "./inbox.js";
 import { loadRoutines, routinesSummary } from "./routines.js";
+import { createSecrets } from "./secrets.js";
+import { createSlackBridge, loadSlackState, saveSlackState, controlSummary, SLACK_MANIFEST, DELIVER_MODES } from "./slack.js";
 import { brainRespond, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
 import { collectWorkerReport, reportHeadline } from "./brain/report.js";
 import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChain, discardChain } from "./worktrees.js";
@@ -103,7 +105,9 @@ function paintConversation(win = convoWin) {
 }
 let speakToken = 0;
 // force: say it even with voice mode off (the brief you asked for, from the menu bar).
+let speechMuted = 0; // >0 while handling a Slack message: the Mac stays quiet
 async function speak(win, text, { force = false } = {}) {
+  if (speechMuted > 0) return;
   const t = String(text ?? "").trim();
   if (!t || (!force && !isVoiceMode(shellStore()))) return;
   const my = ++speakToken;
@@ -443,11 +447,15 @@ function startChief(broadcast, commitText) {
       const news = !firstInbox;
       firstInbox = false;
       if (news && away && fresh.length) presence.notify(fresh.length === 1 ? fresh[0].title : `${fresh.length} decisions waiting`, fresh.map((i) => i.detail || i.title).join(" · "));
+      if (news) for (const item of fresh) deliver(() => slack?.postInbox(item));
     },
     brain: (prompt, { context }) => brainRespond(prompt, (d) => win?.webContents.send("session.stream", { delta: d }), { voice: true, context, ephemeral: true }),
     context: jarvisContext,
     speak: (text, opts) => speak(win, text, opts),
-    notify: (title, body) => { if (!win || !win.isVisible() || !win.isFocused()) presence.notify(title, body); },
+    notify: (title, body, extra = {}) => {
+      if (!win || !win.isVisible() || !win.isFocused()) presence.notify(title, body);
+      deliver(() => slack?.post(extra.full ? `*${title}*\n${extra.full}` : `*${title}*\n${body}`));
+    },
     runPrompt: (text) => commitText(text),
     workers: () => snapshot(),
     projects: () => recentProjects(),
@@ -462,9 +470,99 @@ function startChief(broadcast, commitText) {
     lastBriefAt,
   });
   chief.start();
+  startSlack(broadcast);
   ipcMain.handle("inbox.list", async () => ({ ok: true, items: chief.refreshInbox() }));
   ipcMain.handle("inbox.act", async (_e, { id, action } = {}) => answerInbox(id, action, broadcast));
   ipcMain.handle("brief.now", async () => chief.brief({ spoken: true }));
+}
+
+// Slack bridge (slack.js): tokens in the keychain-backed secrets store,
+// owner pairing with a code shown in the deck, DMs through commitText.
+let slack = null;
+let slackPairCode = String(1000 + Math.floor(Math.random() * 9000));
+const secrets = createSecrets({
+  available: () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } },
+  encrypt: (s) => safeStorage.encryptString(s),
+  decrypt: (b) => safeStorage.decryptString(b),
+});
+
+// Push to Slack per the delivery mode: "away" = only when the deck is hidden
+// or not focused, "always", or "off". Never throws into the caller.
+function deliver(send) {
+  const st = loadSlackState();
+  if (!slack || !st.owner || st.deliver === "off") return;
+  const away = !win || !win.isVisible() || !win.isFocused();
+  if (st.deliver === "away" && !away) return;
+  Promise.resolve().then(send).catch((err) => console.warn(`[slack] ${err.message ?? err}`));
+}
+
+function slackPublicStatus() {
+  const st = loadSlackState();
+  return {
+    ...(slack?.status() ?? { state: "off" }),
+    configured: secrets.has("slack.bot") && secrets.has("slack.app"),
+    secureStorage: secrets.available(),
+    paired: !!st.owner,
+    pairCode: st.owner ? null : slackPairCode,
+    deliver: st.deliver ?? "away",
+  };
+}
+
+function startSlack(broadcast) {
+  const pushStatus = () => broadcast({ kind: "slack.status", status: slackPublicStatus() });
+  const make = () => createSlackBridge({
+    tokens: () => ({ bot: secrets.get("slack.bot"), app: secrets.get("slack.app") }),
+    pairCode: () => slackPairCode,
+    onStatus: pushStatus,
+    onPaired: () => { pushStatus(); broadcast({ kind: "session.stream", delta: "\n[slack] paired with your Slack account\n" }); },
+    onMessage: async (text) => {
+      broadcast({ kind: "slack.message", text });
+      speechMuted++;
+      try { return controlSummary(await commitTextRef(text)); }
+      finally { speechMuted--; broadcast({ kind: "session.done", status: "ok" }); }
+    },
+    onAction: (id, action) => answerInbox(id, action, broadcast),
+    log: (m) => console.warn(`[${m}]`),
+  });
+  const connect = async () => {
+    slack?.stop();
+    slack = make();
+    await slack.start();
+    pushStatus();
+    return slackPublicStatus();
+  };
+  if (secrets.has("slack.bot") && secrets.has("slack.app")) connect().catch((err) => console.warn(`[slack] ${err.message ?? err}`));
+  ipcMain.handle("slack.status", async () => slackPublicStatus());
+  ipcMain.handle("slack.manifest", async () => { clipboard.writeText(SLACK_MANIFEST); return { ok: true }; });
+  ipcMain.handle("slack.openSetup", async () => { await electronShell.openExternal("https://api.slack.com/apps?new_app=1"); return { ok: true }; });
+  ipcMain.handle("slack.connect", async (_e, { bot, app: appToken } = {}) => {
+    if (bot) secrets.set("slack.bot", String(bot).trim());
+    if (appToken) secrets.set("slack.app", String(appToken).trim());
+    return connect();
+  });
+  ipcMain.handle("slack.disconnect", async (_e, { forget = false } = {}) => {
+    slack?.stop();
+    slack = null;
+    if (forget) {
+      secrets.remove("slack.bot");
+      secrets.remove("slack.app");
+      saveSlackState({ deliver: loadSlackState().deliver ?? "away" });
+      slackPairCode = String(1000 + Math.floor(Math.random() * 9000));
+    }
+    pushStatus();
+    return slackPublicStatus();
+  });
+  ipcMain.handle("slack.deliver", async (_e, { mode } = {}) => {
+    if (!DELIVER_MODES.includes(mode)) throw new Error(`deliver: ${DELIVER_MODES.join("|")}`);
+    saveSlackState({ ...loadSlackState(), deliver: mode });
+    pushStatus();
+    return slackPublicStatus();
+  });
+  ipcMain.handle("slack.test", async () => {
+    if (!slack || !loadSlackState().owner) throw new Error("not paired yet");
+    await slack.post("Hello from Jarvis on your Mac. You'll get decisions, briefs and worker results here when you're away.");
+    return { ok: true };
+  });
 }
 
 async function buildBootstrapCtx(directory) {
@@ -688,6 +786,8 @@ app.whenReady().then(async () => {
     else if (ev.kind === "form.resolved") broadcast({ kind: "form.resolved", ...ev });
     else if (ev.kind === "worker.done") {
       broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
+      const dw = workers.get(ev.sessionID);
+      if (dw) deliver(() => slack?.post(`${dw.state === "failed" ? "✗ Worker failed" : "✓ Worker finished"}: ${String(dw.task ?? "").replace(/\s+/g, " ").slice(0, 160)}`));
       reviewWorker(ev, broadcast).catch((err) => {
         console.error("worker review failed:", err?.message ?? err);
         win?.webContents.send("session.stream", { delta: `[review] failed: ${String(err?.message ?? err).slice(0, 160)}\n` });
@@ -699,7 +799,7 @@ app.whenReady().then(async () => {
     // Chief-of-staff phrases, handled here without a model round trip first.
     if (chief && isBriefRequest(text)) {
       const r = await chief.brief({ spoken: true });
-      return { ok: r.ok, control: "brief" };
+      return { ok: r.ok, control: "brief", reply: r.reply, reason: r.reason };
     }
     if (chief && /^(?:jarvis,? )?(?:stand down|emergency stop|stop everything)[.!]?$/i.test(String(text ?? "").trim())) {
       const r = await chief.standDown();
@@ -827,7 +927,7 @@ app.whenReady().then(async () => {
       }
       dispatched.push({ task: d.task, ...dr });
     }
-    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0, dispatches: dispatched };
+    return { ok: true, sessionID: r.sessionID, modelUsed: r.modelUsed, status: r.status, files: files?.length ?? 0, dispatches: dispatched, reply: r.status === "ok" ? (r.reply ?? r.text ?? "") : `That didn't work (${r.status}).` };
   };
   commitTextRef = commitText;
   ipcMain.handle("utterance.commit", async (_e, utterance, extra = {}) => {

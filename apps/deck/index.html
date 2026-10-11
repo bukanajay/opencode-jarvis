@@ -419,6 +419,27 @@
     <div class="res" id="profile-note"></div>
     </div>
   </details>
+  <details id="slack-settings" open>
+    <summary>Slack <span class="res" id="slack-sum"></span></summary>
+    <div class="body">
+    <div id="slack-setup">
+      <p class="res">Reach Jarvis from Slack when you're away from the Mac: DM it like the deck, get decisions with buttons, briefs and worker results. Runs over Socket Mode from this Mac (no server).</p>
+      <p class="res">1. <button class="ghost" id="slack-manifest" type="button">Copy app manifest</button> then <button class="ghost" id="slack-open" type="button">Create the Slack app</button> → <i>From an app manifest</i>, pick your workspace, paste, create.</p>
+      <p class="res">2. <b>Install to Workspace</b>, then copy the <b>Bot User OAuth Token</b> (xoxb-…) from <i>OAuth &amp; Permissions</i>.</p>
+      <p class="res">3. <i>Basic Information → App-Level Tokens</i> → generate one with scope <code>connections:write</code> (xapp-…).</p>
+      <p><label class="res">Bot token<br /><input id="slack-bot" type="password" autocomplete="off" placeholder="xoxb-…" style="width:100%" /></label></p>
+      <p><label class="res">App-level token<br /><input id="slack-app" type="password" autocomplete="off" placeholder="xapp-…" style="width:100%" /></label></p>
+      <p class="row"><button id="slack-connect" type="button">Connect</button></p>
+    </div>
+    <div id="slack-live" style="display:none">
+      <p class="res" id="slack-state"></p>
+      <p class="res" id="slack-pair" style="display:none"></p>
+      <p><label class="res">Send me decisions, briefs and results<br /><select id="slack-deliver" style="width:100%"><option value="away">Only when I'm away from the deck</option><option value="always">Always</option><option value="off">Never (DMs still work)</option></select></label></p>
+      <p class="row"><button class="ghost" id="slack-test" type="button">Send test message</button><button class="ghost" id="slack-off" type="button">Disconnect</button><button class="ghost danger" id="slack-forget" type="button">Forget tokens</button></p>
+    </div>
+    <div class="res" id="slack-note"></div>
+    </div>
+  </details>
   <details id="voice-settings" open>
     <summary>Voice</summary>
     <div class="body">
@@ -1827,6 +1848,46 @@
       $("profile-note").textContent = e.target.checked ? "Jarvis will start in the menu bar when you log in." : "Jarvis won't start at login.";
     } catch (err) { e.target.checked = !e.target.checked; $("profile-note").textContent = String(err.message ?? err); }
   };
+  // Slack bridge panel: setup steps until tokens are saved, then live status,
+  // the pairing code (until paired) and the delivery mode.
+  function paintSlack(st) {
+    if (!st) return;
+    const live = st.configured;
+    $("slack-setup").style.display = live ? "none" : "block";
+    $("slack-live").style.display = live ? "block" : "none";
+    const label = { connected: "connected", connecting: "connecting…", error: "error", off: "off" }[st.state] ?? st.state;
+    $("slack-sum").textContent = live ? `· ${st.paired ? "paired" : label}` : "";
+    $("slack-state").textContent = live ? `${label}${st.team ? ` to ${st.team}` : ""}${st.error ? ` — ${st.error}` : ""}` : "";
+    const pair = $("slack-pair");
+    pair.style.display = live && !st.paired && st.pairCode ? "block" : "none";
+    pair.innerHTML = st.pairCode ? `In Slack, open a DM with <b>Jarvis</b> and send: <code>pair ${st.pairCode}</code>` : "";
+    $("slack-deliver").value = st.deliver ?? "away";
+    $("slack-test").disabled = !st.paired;
+    if (!st.secureStorage) $("slack-note").textContent = "Secure storage isn't available, so Jarvis won't save tokens.";
+  }
+  const slackNote = (t) => { $("slack-note").textContent = t; };
+  $("slack-manifest").onclick = async () => { await window.jarvis.slackManifest(); slackNote("Manifest copied to the clipboard."); };
+  $("slack-open").onclick = () => window.jarvis.slackOpenSetup();
+  $("slack-connect").onclick = async () => {
+    const bot = $("slack-bot").value.trim();
+    const app = $("slack-app").value.trim();
+    if (!bot.startsWith("xoxb-") || !app.startsWith("xapp-")) { slackNote("Bot token starts with xoxb-, app-level token with xapp-."); return; }
+    $("slack-connect").disabled = true;
+    slackNote("connecting…");
+    try {
+      paintSlack(await window.jarvis.slackConnect({ bot, app }));
+      $("slack-bot").value = ""; $("slack-app").value = "";
+      slackNote("");
+    } catch (e) { slackNote(String(e.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "")); paintSlack(await window.jarvis.slackStatus()); }
+    finally { $("slack-connect").disabled = false; }
+  };
+  $("slack-deliver").onchange = async (e) => paintSlack(await window.jarvis.slackDeliver(e.target.value));
+  $("slack-test").onclick = async () => { try { await window.jarvis.slackTest(); slackNote("Sent. Check Slack."); } catch (e) { slackNote(String(e.message ?? e)); } };
+  $("slack-off").onclick = async () => paintSlack(await window.jarvis.slackDisconnect(false));
+  $("slack-forget").onclick = async () => { paintSlack(await window.jarvis.slackDisconnect(true)); slackNote("Tokens removed and unpaired."); };
+  window.jarvis?.onSlackStatus?.(({ status }) => paintSlack(status));
+  window.jarvis?.onSlackMessage?.(({ text }) => { addMsg("you", `📱 ${text}`); scrollLog(); });
+  window.jarvis?.slackStatus?.().then(paintSlack).catch(() => {});
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("q").value.trim();

@@ -67,7 +67,7 @@ export function createChief(deps) {
       lastBriefAt.value = t;
       const line = r.speak ?? null;
       if (line) speak(line, { force: spoken });
-      notify("Your brief is ready", line ?? String(r.reply ?? "").split("\n")[0]);
+      notify("Your brief is ready", line ?? String(r.reply ?? "").split("\n")[0], { full: r.reply });
       return { ok: true, reply: r.reply, facts };
     } finally {
       briefing = false;

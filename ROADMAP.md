@@ -46,7 +46,10 @@ via OpenCode model list, no new keys). Local long-term memory.
   login), decision inbox, routines scheduler, brief, stand-down, brain eval
   suite (`npm run eval:brain`, 22 cases)
 
-Next (see docs/CHIEF-OF-STAFF.md): phone/Slack bridge, MCP connectors managed
+- [x] Slack bridge (Socket Mode): owner-paired DMs through the same brain,
+  decision buttons, briefs and worker results when away; tokens in the keychain
+
+Next (see docs/CHIEF-OF-STAFF.md): MCP connectors managed
 by Jarvis (calendar, email, Slack, GitHub, Linear, Stripe), structured memory +
 commitments, meeting copilot, autonomy policies.
 
