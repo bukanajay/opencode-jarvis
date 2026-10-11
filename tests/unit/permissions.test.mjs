@@ -45,3 +45,23 @@ test("while a question is pending, okay/yes are answers, not filler", () => {
   assert.deepEqual(nextVoiceAction("Okay.", { ...on, answering: true }), { action: "follow-up", text: "Okay." });
   assert.deepEqual(nextVoiceAction("yes", { ...on, answering: true }), { action: "follow-up", text: "yes" });
 });
+
+import { normalizeFences } from "../../apps/main/src/fences.js";
+import { parseDispatches, stripDispatches, fencedFilter } from "../../apps/main/src/brain/brain.js";
+import { parseJarvisActions } from "../../apps/main/src/actions.js";
+import { parseSpeak } from "../../apps/main/src/speech.js";
+
+test("split fences (closing ``` on the next line) are not dropped", () => {
+  // Exact shape the brain produced for "is Claude installed?" in the eval.
+  const reply = "I’ll check whether Claude is installed.\n\n```dispatch {\"task\":\"Check whether Claude is installed.\"}\n```";
+  assert.deepEqual(parseDispatches(reply).dispatches, [{ task: "Check whether Claude is installed.", agent: null }]);
+  assert.equal(stripDispatches(reply), "I’ll check whether Claude is installed.");
+  assert.equal(parseJarvisActions('Done.\n```jarvis {"action": "hush"}\n```').actions.length, 1);
+  assert.equal(parseSpeak('x\n```speak {"text": "Hi."}\n```'), "Hi.");
+  assert.equal(normalizeFences("```js\nconst a = 1;\n```"), "```js\nconst a = 1;\n```", "ordinary code blocks untouched");
+  const seen = [];
+  const f = fencedFilter((d) => seen.push(d));
+  for (const ch of reply.match(/.{1,7}/gs)) f.push(ch);
+  f.flush();
+  assert.equal(seen.join(""), "I’ll check whether Claude is installed.\n\n", "neither half reaches the deck");
+});

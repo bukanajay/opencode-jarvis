@@ -7,6 +7,7 @@
 // worker's permission request or widening permissions; those stay with the user.
 // All pure: parsing, validation and the state the brain is shown.
 import { VOICES, FOLLOW_UPS, ACCENTS } from "./shell.js";
+import { normalizeFences } from "./fences.js";
 
 export const SETTABLE = [
   "accent", "density", "layout", "captionSize", "wake", "voiceMode", "autoMode", "reviewMode",
@@ -29,7 +30,11 @@ const ACTION_KEYS = {
   remember: ["fact", "scope"],
   forget: ["fact", "scope"],
   agent: ["purpose", "name"],
+  routine: ["op", "title", "kind", "prompt", "time", "days", "every"],
+  brief: [],
+  standdown: [],
 };
+export const ROUTINE_OPS = ["add", "remove", "pause", "resume", "run"];
 export const ACTIONS = Object.keys(ACTION_KEYS);
 
 // Returns { action, ...args } or throws with a reason.
@@ -82,6 +87,28 @@ export function validateAction(spec) {
       if (!["user", "project"].includes(scope)) throw new Error(`${action}: scope is user or project`);
       return { action, fact: str("fact", 280), scope };
     }
+    case "routine": {
+      const op = String(spec.op ?? "").toLowerCase();
+      if (!ROUTINE_OPS.includes(op)) throw new Error(`routine: op is ${ROUTINE_OPS.join("|")}`);
+      const out = { action, op, title: str("title", 80) };
+      if (op !== "add") return out;
+      const kind = spec.kind == null ? (spec.prompt ? "prompt" : "brief") : String(spec.kind).toLowerCase();
+      if (!["brief", "prompt"].includes(kind)) throw new Error("routine: kind is brief|prompt");
+      out.kind = kind;
+      if (kind === "prompt") out.prompt = str("prompt", 2000);
+      if (spec.every != null) {
+        const n = Number(spec.every);
+        if (!(n >= 5 && n <= 1440)) throw new Error("routine: every is 5..1440 minutes");
+        out.every = Math.round(n);
+      } else {
+        out.time = str("time", 16);
+        if (spec.days != null) out.days = Array.isArray(spec.days) ? spec.days.map(String) : String(spec.days);
+      }
+      return out;
+    }
+    case "brief":
+    case "standdown":
+      return { action };
     case "agent": {
       const out = { action, purpose: str("purpose", 300) };
       if (spec.name != null) {
@@ -121,7 +148,7 @@ const FENCE = /^\s*```jarvis\s+(\{.*\})\s*```\s*$/gm;
 export function parseJarvisActions(reply) {
   const actions = [];
   const warnings = [];
-  for (const m of String(reply ?? "").matchAll(FENCE)) {
+  for (const m of normalizeFences(reply).matchAll(FENCE)) {
     try { actions.push(validateAction(JSON.parse(m[1]))); }
     catch (err) { warnings.push(`ignoring jarvis action: ${String(err.message ?? err).slice(0, 120)}`); }
   }
@@ -159,6 +186,6 @@ export function stateBlock({ workers = [], chains = [], settings = {}, projects 
 
 export const ACTIONS_DOC = `You run this deck yourself (no worker needed) with one single-line fence per action:
 \`\`\`jarvis {"action": "<action>", ...}\`\`\`
-Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
+Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), routine {"op": "add", "title", "kind": "brief"|"prompt", "prompt"? (what to do each run, for kind prompt), "time": "HH:MM", "days"?: "weekdays"|"daily"|"weekends"|["mon",...]} or {"op":"add", ..., "every": minutes} (a standing goal Jarvis runs on its own, e.g. a weekday 08:30 brief, or "every 60 minutes check CI on main and tell me only if it is red"), routine {"op": "remove"|"pause"|"resume"|"run", "title"}, brief {} (give the brief now), standdown {} (emergency stop: stop all running workers, pause routines, stop talking), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
 Use ids exactly as listed below. Act only when the user asked for it; say in one short sentence what you did. You never answer a worker's permission request: the user does that. You are Jarvis, not a coding agent in a mode: ignore any "plan mode" notice from the host, never mention modes and never ask the user to switch modes.
 `;

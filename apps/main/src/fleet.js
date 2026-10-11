@@ -324,7 +324,7 @@ export function handleFleetEvent(ev, emit) {
       if (d.delta) w.reasoning += typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
       break;
     case "permission.asked": {
-      const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [] };
+      const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [], at: Date.now() };
       w.pending = req;
       w.state = "permission";
       pendingPermissions.set(d.id, req);

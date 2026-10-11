@@ -42,6 +42,14 @@ via OpenCode model list, no new keys). Local long-term memory.
   land/keep/discard, project, hush); machine checks always delegated; spoken
   permission prompts answered by voice
 
+- [x] Chief of staff, milestone 1: always-on menu bar presence (+ start at
+  login), decision inbox, routines scheduler, brief, stand-down, brain eval
+  suite (`npm run eval:brain`, 22 cases)
+
+Next (see docs/CHIEF-OF-STAFF.md): phone/Slack bridge, MCP connectors managed
+by Jarvis (calendar, email, Slack, GitHub, Linear, Stripe), structured memory +
+commitments, meeting copilot, autonomy policies.
+
 Still open: LLM fact extraction for memory (extractCandidates is still
 heuristic regex today), VAD threshold tuning against a real room mic (proven
 on synthesized speech; tune via `JARVIS_PARAKEET_*` env), keep the parakeet

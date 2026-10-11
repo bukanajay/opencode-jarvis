@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -53,6 +53,7 @@ export const DEFAULTS = {
   followUp: "30",
   userName: "",
   onboarded: "off", // first-run setup wizard done
+  launchAtLogin: "off", // start Jarvis (menu bar, window hidden) when you log in
 };
 
 export function storePath() {
@@ -98,6 +99,7 @@ const KEY_OF = {
   "set.followUp": "followUp",
   "set.userName": "userName",
   "set.onboarded": "onboarded",
+  "set.launchAtLogin": "launchAtLogin",
 };
 export const ON_OFF = ["on", "off"];
 export const ISOLATIONS = ["worktree", "shared"];
@@ -136,6 +138,7 @@ function validate(name, args) {
     case "set.userName":
       if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,47}$/u.test(value)) throw new Error(`${name}: letters, spaces, . ' - only (max 48)`);
       break;
+    case "set.launchAtLogin":
     case "set.onboarded":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
       break;

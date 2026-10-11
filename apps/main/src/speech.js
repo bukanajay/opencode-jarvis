@@ -1,13 +1,14 @@
 // Spoken replies: what Jarvis says out loud in voice mode, and when the mic
 // may interrupt it. All pure; the deck owns the actual text-to-speech.
 import { hasWake, stripWake } from "./voice.js";
+import { normalizeFences } from "./fences.js";
 
 const SPEAK_RE = /^\s*```speak\s+(\{.*\})\s*```\s*$/m;
 const MAX_SPOKEN = 260;
 
 // The model's own spoken line: ```speak {"text": "..."}``` on a line of its own.
 export function parseSpeak(reply) {
-  const m = String(reply ?? "").match(SPEAK_RE);
+  const m = normalizeFences(reply).match(SPEAK_RE);
   if (!m) return null;
   try {
     const spec = JSON.parse(m[1]);
@@ -57,7 +58,7 @@ export function speechFor(reply) {
 }
 
 export function stripSpeak(reply) {
-  return String(reply ?? "").split("\n").filter((ln) => !/^\s*```speak\s+\{.*\}\s*```\s*$/.test(ln)).join("\n");
+  return normalizeFences(reply).split("\n").filter((ln) => !/^\s*```speak\s+\{.*\}\s*```\s*$/.test(ln)).join("\n");
 }
 
 // While Jarvis is speaking (plus a short tail for room echo) the mic hears

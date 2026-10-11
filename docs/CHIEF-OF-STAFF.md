@@ -117,6 +117,15 @@ Shared company memory and decision inbox for co-founders and leads,
 per-person voices and permissions, and Jarvis as the team's operator in
 Slack.
 
+## Status
+
+Milestone 1 shipped: the Electron main process is the always-on process
+(menu bar, start at login, notifications), and on top of it the decision
+inbox, routines with scheduler, the brief, stand-down, and the brain eval
+suite. A separate `jarvisd` daemon is deferred until a second client (phone or
+Slack bridge) needs it. The first eval run caught a real bug: dispatch fences
+whose closing ``` was on the next line were silently dropped.
+
 ## Recommended next step
 
 Start Phase 0's daemon split together with Phase 1's **morning brief and

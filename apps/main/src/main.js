@@ -7,6 +7,11 @@ import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js"
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
+import { createChief } from "./chief.js";
+import { createPresence, wireWindow, startHidden } from "./presence.js";
+import { isBriefRequest } from "./brief.js";
+import { inboxSummary } from "./inbox.js";
+import { loadRoutines, routinesSummary } from "./routines.js";
 import { brainRespond, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
 import { collectWorkerReport, reportHeadline } from "./brain/report.js";
 import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChain, discardChain } from "./worktrees.js";
@@ -97,9 +102,10 @@ function paintConversation(win = convoWin) {
   if (open && Number.isFinite(ms)) convoTimer = setTimeout(() => paintConversation(), ms + 50);
 }
 let speakToken = 0;
-async function speak(win, text) {
+// force: say it even with voice mode off (the brief you asked for, from the menu bar).
+async function speak(win, text, { force = false } = {}) {
   const t = String(text ?? "").trim();
-  if (!t || !isVoiceMode(shellStore())) return;
+  if (!t || (!force && !isVoiceMode(shellStore()))) return;
   const my = ++speakToken;
   const voice = shellStore().settings.voice;
   let rendered = null;
@@ -109,8 +115,8 @@ async function speak(win, text) {
     console.warn(`[voice] ${err.message ?? err}; deck falls back to the system voice`);
   }
   // A hush, a newer line or voice-off while rendering wins.
-  if (my !== speakToken || !isVoiceMode(shellStore())) return;
-  win?.webContents.send("jarvis.speak", { text: t, voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0 });
+  if (my !== speakToken || (!force && !isVoiceMode(shellStore()))) return;
+  win?.webContents.send("jarvis.speak", { text: t, voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0, force });
 }
 function hush(win) {
   speakToken++;
@@ -229,6 +235,8 @@ async function runFleetCleanup(states, { quiet = false } = {}) {
 }
 
 let commitTextRef = null; // set once the IPC layer defines commitText
+let chief = null; // chief-of-staff loop (inbox, routines, brief), created at startup
+let presence = null; // menu bar + notifications
 
 // What the brain is shown about the deck each turn (actions.js stateBlock).
 function jarvisContext() {
@@ -239,7 +247,7 @@ function jarvisContext() {
       settings: shellStore().settings,
       projects: recentProjects(),
       pendingPermissions: pendingPermissions.size,
-    });
+    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}`;
   } catch (err) {
     return `(deck state unavailable: ${String(err.message ?? err).slice(0, 80)})`;
   }
@@ -340,6 +348,23 @@ async function runJarvisAction(a, broadcast) {
         note(`forgot: ${hits[0].text}`);
         return { ok: true };
       }
+      case "routine": {
+        if (!chief) return fail("routines are not running yet");
+        const r = chief.routineOp(a);
+        if (!r.ok) return fail(r.reason);
+        note(r.line);
+        return r;
+      }
+      case "brief":
+        if (!chief) return fail("not ready yet");
+        chief.brief({ spoken: true }).catch((err) => note(`brief failed: ${err.message ?? err}`));
+        return { ok: true };
+      case "standdown": {
+        if (!chief) return fail("not ready yet");
+        const r = await chief.standDown();
+        speak(win, r.line, { force: true });
+        return r;
+      }
       case "agent": {
         const directory = projectDir();
         const ctx = await buildBootstrapCtx(directory);
@@ -356,6 +381,90 @@ async function runJarvisAction(a, broadcast) {
   } catch (err) {
     return fail(String(err.message ?? err).slice(0, 120));
   }
+}
+
+// Chief of staff: decision inbox, routines, brief, menu bar. Created once the
+// window and IPC exist; keeps running while the window is hidden.
+function inboxSources() {
+  return {
+    permissions: [...pendingPermissions.values()],
+    configs: [...pendingConfigs.values()],
+    forms: [...pendingForms.values()],
+    bootstraps: [...bootStash.entries()].map(([id, e]) => ({
+      id,
+      name: e.conv?.name,
+      prompt: e.gate ? `No agent yet for: ${String(e.task ?? "").slice(0, 80)} — create one?` : "answer on the card",
+      at: Number(String(id).split("_")[1] ? parseInt(String(id).split("_")[1], 36) : 0) || 0,
+    })),
+    chains: [...chains.values()].map((c) => ({ ...c, busy: chainBusy(c.chainID), task: workers.get(c.chainID)?.task })),
+    workers,
+  };
+}
+
+async function answerInbox(id, action, broadcast) {
+  const item = (chief?.refreshInbox() ?? []).find((i) => i.id === id);
+  if (!item) return { ok: false, reason: "that item is no longer waiting" };
+  if (!item.actions.includes(action)) return { ok: false, reason: `${item.kind} cannot ${action}` };
+  let r = { ok: true };
+  if (item.kind === "permission") {
+    await replyPermission(item.ref, action === "allow" ? "allow" : "deny");
+  } else if (item.kind === "config") {
+    r = await confirmWidening((await ensureClient()).client, projectDir(), item.ref, action === "confirm", widenHooks());
+    broadcastConfig(r);
+  } else if (item.kind === "agent" && action === "cancel") {
+    bootStash.delete(item.ref);
+    broadcast({ kind: "bootstrap.cancelled", id: item.ref });
+  } else if (item.kind === "branch") {
+    r = await chainAction(action, item.ref, broadcast);
+  } else if (action === "open") {
+    win?.show();
+    r = { ok: true, open: true };
+  }
+  chief?.refreshInbox();
+  return { ok: r.ok !== false, ...r };
+}
+
+function startChief(broadcast, commitText) {
+  const showDeck = () => { win?.show(); win?.focus(); };
+  presence = createPresence({
+    show: showDeck,
+    brief: () => chief?.brief({ spoken: true }).catch(() => {}),
+    openInbox: () => { showDeck(); win?.webContents.send("inbox.open", {}); },
+    standDown: async () => { const r = await chief?.standDown(); if (r) speak(win, r.line, { force: true }); },
+  });
+  const lastBriefAt = { value: Number(shellStore().settings.lastBriefAt ?? 0) || 0 };
+  let firstInbox = true; // what was already waiting at startup is not news
+  chief = createChief({
+    inboxSources,
+    broadcast,
+    onInbox: (items, fresh) => {
+      presence.setInbox(items.length);
+      const away = !win || !win.isVisible() || !win.isFocused();
+      const news = !firstInbox;
+      firstInbox = false;
+      if (news && away && fresh.length) presence.notify(fresh.length === 1 ? fresh[0].title : `${fresh.length} decisions waiting`, fresh.map((i) => i.detail || i.title).join(" · "));
+    },
+    brain: (prompt, { context }) => brainRespond(prompt, (d) => win?.webContents.send("session.stream", { delta: d }), { voice: true, context, ephemeral: true }),
+    context: jarvisContext,
+    speak: (text, opts) => speak(win, text, opts),
+    notify: (title, body) => { if (!win || !win.isVisible() || !win.isFocused()) presence.notify(title, body); },
+    runPrompt: (text) => commitText(text),
+    workers: () => snapshot(),
+    projects: () => recentProjects(),
+    userName: () => shellStore().settings.userName,
+    stopWorkers: async () => {
+      const live = [...workers.values()].filter((w) => ["working", "permission", "idle"].includes(w.state));
+      for (const w of live) await stopWorker(w.sessionID).catch(() => {});
+      broadcast({ kind: "fleet.state", snapshot: snapshot() });
+      return live.length;
+    },
+    hush: () => hush(win),
+    lastBriefAt,
+  });
+  chief.start();
+  ipcMain.handle("inbox.list", async () => ({ ok: true, items: chief.refreshInbox() }));
+  ipcMain.handle("inbox.act", async (_e, { id, action } = {}) => answerInbox(id, action, broadcast));
+  ipcMain.handle("brief.now", async () => chief.brief({ spoken: true }));
 }
 
 async function buildBootstrapCtx(directory) {
@@ -545,6 +654,7 @@ async function createWindow() {
   win = new BrowserWindow({
     width: 1100,
     height: 760,
+    show: !startHidden(),
     backgroundColor: "#060809",
     webPreferences: {
       preload: path.join(here, "preload.cjs"),
@@ -553,6 +663,7 @@ async function createWindow() {
     },
   });
   await win.loadFile(path.join(here, "../../deck/index.html"));
+  wireWindow(win); // closing hides; Jarvis keeps running in the menu bar
 }
 
 app.on("will-quit", () => stopVoice());
@@ -585,6 +696,16 @@ app.whenReady().then(async () => {
     else broadcast({ kind: "fleet.state", snapshot: ev.snapshot });
   });
   const commitText = async (text, files) => {
+    // Chief-of-staff phrases, handled here without a model round trip first.
+    if (chief && isBriefRequest(text)) {
+      const r = await chief.brief({ spoken: true });
+      return { ok: r.ok, control: "brief" };
+    }
+    if (chief && /^(?:jarvis,? )?(?:stand down|emergency stop|stop everything)[.!]?$/i.test(String(text ?? "").trim())) {
+      const r = await chief.standDown();
+      speak(win, r.line, { force: true });
+      return { ok: true, control: "standdown", ...r };
+    }
     const formMatch = matchPendingForm(text);
     const routed = routeUtterance(text, undefined, undefined, formMatch?.answer ?? null);
     if (routed.route === "permission") {
@@ -886,6 +1007,10 @@ app.whenReady().then(async () => {
       if (slash < 0) throw new Error("set.jarvisModel: want provider/id");
       await setBrainModel(m.slice(0, slash), m.slice(slash + 1));
     }
+    if (name === "set.launchAtLogin") {
+      const r = presence?.setLaunchAtLogin(args?.value === "on");
+      if (r && !r.ok) throw new Error(r.reason);
+    }
     const entry = applyAppCommand(shellStore(), name, args);
     broadcast({ kind: "settings.applied", entry, settings: shellStore().settings });
     onVoiceSettings(name, args?.value);
@@ -990,6 +1115,7 @@ app.whenReady().then(async () => {
     if (!sessionID) throw new Error("form.list: sessionID required");
     return { ok: true, forms: await refreshForms(sessionID) };
   });
+  startChief(broadcast, commitText); // IPC first: the deck asks for the inbox while loading
   await createWindow();
   if (isVoiceMode(shellStore())) voiceLoop(commitText, win);
   import("./brain/memory.js").then((m) => m.warmEmbeddings()).catch(() => {});

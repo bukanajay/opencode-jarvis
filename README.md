@@ -61,6 +61,14 @@ with the OpenCode session as its reasoner:
 - Shell phrases (`dim the fleet`, `use the amber accent`) apply locally with no model call. Permission answers (`allow`/`deny`) and worker controls (`stop the worker`) are exact-match controls (trailing `.`/`!`/`?` from the speech engine is ignored).
 - **Parakeet (Apple Silicon)** — the helper opens the mic before the model loads, resamples to 16 kHz, gates on an adaptive energy VAD, re-transcribes the utterance every ~0.7 s for live captions and commits after ~0.9 s of silence. Noise that transcribes to nothing is dropped, not committed. Tunables (env, no rebuild): `JARVIS_PARAKEET_SILENCE_MS` (900), `JARVIS_PARAKEET_PARTIAL_MS` (700), `JARVIS_PARAKEET_MIN_SPEECH_MS` (250), `JARVIS_PARAKEET_MIN_RMS` (0.008), `JARVIS_PARAKEET_MAX_S` (30).
 
+## Chief of staff
+
+- **Always on** — closing the deck hides it; Jarvis keeps running in the menu bar (**J**, with the number of decisions waiting). Menu: Show, Brief me now, Decision inbox, Stand down, Quit. Settings → You → *Start Jarvis when I log in* (opt-in; a LaunchAgent in dev, a login item when packaged). Notifications while the deck is hidden.
+- **Decision inbox** — one queue (inbox icon, badge) for everything waiting on you: worker permissions, config changes, new agents, worker questions, finished branches (land / keep / discard). Answer there, on the cards, or by voice.
+- **Brief** — "good morning", "brief me", "what did I miss": git activity across recent projects, fleet results, the inbox and today's routines, composed by the brain (which may add what its read-only tools see, e.g. cloud cost) and spoken.
+- **Routines** — standing goals Jarvis runs on its own: "brief me every weekday at 8:30", "every hour check CI on main and only tell me if it is red". Stored in `~/.config/jarvis/routines.json`; a routine missed while the Mac slept runs once on wake. "Stand down" stops every running worker and pauses all routines.
+- **Brain eval** — `npm run eval:brain [-- --model provider/id]` scores 22 real requests (delegation, actions, safety) against the live model and appends the result to `~/.config/jarvis/evals.jsonl`.
+
 ## What Jarvis does itself
 
 Jarvis's brain is read-only: it reads the project, never edits it or runs commands (deny rules on its session; anything on the code or the machine goes to a worker, and a reply like "I can't access your shell" is turned into a worker task automatically). It still runs the deck: each turn it sees the live state (workers with ids/states/tasks, open worktree branches, pending approvals, settings, recent projects) and can act on it with a validated ```` ```jarvis {"action": …}``` ```` fence (`apps/main/src/actions.js`):
@@ -74,6 +82,7 @@ Jarvis's brain is read-only: it reads the project, never edits it or runs comman
 | `project` switch, `hush` | "switch over to the billing api project" |
 | `remember` / `forget` a fact (yours, or just this project's) | "keep in mind I hate long answers" |
 | `agent`: start creating a specialist (you pick its model on the card) | "I need an agent that reviews SQL migrations" |
+| `routine` add / remove / pause / resume / run, `brief`, `standdown` | "brief me every weekday at 8:30" |
 
 Main re-validates every action, writes the outcome to the transcript, and says so out loud if it failed. Jarvis never answers a worker's permission request; you do, on the card or by voice ("yes" / "no").
 

@@ -14,6 +14,7 @@ import { speechFor } from "../speech.js";
 import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
 import { parseJarvisActions, ACTIONS_DOC } from "../actions.js";
+import { normalizeFences, OPEN_FENCE_LINE, CLOSE_FENCE_LINE } from "../fences.js";
 
 const brainSessions = new Map(); // directory -> sessionID
 let brainModelUsed = null;
@@ -77,6 +78,7 @@ const BrainState = Annotation.Root({
   warnings: Annotation({ reducer: (_a, b) => b, default: () => [] }),
   context: Annotation({ reducer: (_a, b) => b, default: () => "" }),
   actions: Annotation({ reducer: (_a, b) => b, default: () => [] }),
+  ephemeral: Annotation({ reducer: (_a, b) => b, default: () => false }),
 });
 
 // Act convention: think may emit single-line ```dispatch {"task": "...", "agent": "optional-id"}```
@@ -91,7 +93,7 @@ const DISPATCH_LINE = /^\s*```(?:dispatch|followup|speak|jarvis)\s+\{.*\}\s*```\
 function parseFences(reply, kind, allowed) {
   const out = [];
   const warnings = [];
-  for (const m of String(reply ?? "").matchAll(FENCE_RE)) {
+  for (const m of normalizeFences(reply).matchAll(FENCE_RE)) {
     if (m[1] !== kind) continue;
     let spec;
     try {
@@ -130,26 +132,34 @@ export function parseFollowups(reply) {
 }
 
 export function stripDispatches(reply) {
-  return String(reply ?? "").split("\n").filter((ln) => !DISPATCH_LINE.test(ln)).join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return normalizeFences(reply).split("\n").filter((ln) => !DISPATCH_LINE.test(ln)).join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Incremental streamer: forwards complete non-fence lines, holds fence lines
 // and partial lines back. flush() emits the tail (unless it is a fence).
 export function fencedFilter(forward) {
   let buf = "";
+  let openFence = false; // saw ```kind {...} without its closing ``` yet
+  const keep = (ln) => {
+    if (openFence) {
+      openFence = false;
+      if (CLOSE_FENCE_LINE.test(ln)) return false;
+    }
+    if (DISPATCH_LINE.test(ln)) return false;
+    if (OPEN_FENCE_LINE.test(ln)) { openFence = true; return false; }
+    return true;
+  };
   return {
     push(chunk) {
       buf += String(chunk ?? "");
       const lines = buf.split("\n");
       buf = lines.pop();
-      for (const ln of lines) {
-        if (DISPATCH_LINE.test(ln)) continue;
-        forward(ln + "\n");
-      }
+      for (const ln of lines) if (keep(ln)) forward(ln + "\n");
     },
     flush() {
-      if (buf && !DISPATCH_LINE.test(buf)) forward(buf);
+      if (buf && keep(buf)) forward(buf);
       buf = "";
+      openFence = false;
     },
   };
 }
@@ -215,7 +225,7 @@ function buildGraph(handlers) {
     const registry = await getFleetRegistry(client, projectDir()).catch(() => []);
     const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice, userName: loadStore().settings.userName, context: state.context });
     const r = await brainTurn(prompt, handlers.onDelta, state.files);
-    return { reply: r.text, status: r.status };
+    return { reply: normalizeFences(r.text), status: r.status };
   });
   g.addNode("act", async (state) => {
     // Parse only; execution belongs to main (shared dispatchTask), which owns
@@ -228,6 +238,7 @@ function buildGraph(handlers) {
     return { reply: stripDispatches(state.reply), dispatches, warnings: [...warnings, ...acts.warnings], speak, actions: acts.actions };
   });
   g.addNode("persist", async (state) => {
+    if (state.ephemeral) return { facts: [] }; // briefs and routines are not the user talking
     // "remember for this project …" goes to project memory; everything else
     // the heuristics catch is about the user and stays global.
     const saved = [];
@@ -251,7 +262,7 @@ function buildGraph(handlers) {
 export function brainRespond(text, onDelta, opts = {}) {
   return serialize(async () => {
     compiled = buildGraph({ onDelta });
-    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true, context: opts.context ?? "" });
+    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true, context: opts.context ?? "", ephemeral: opts.ephemeral === true });
     compiled = null;
     return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [], speak: out.speak ?? null, actions: out.actions ?? [] };
   });
