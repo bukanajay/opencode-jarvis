@@ -93,6 +93,18 @@ export function agentFileBody(conv) {
   return head + body;
 }
 
+// Jarvis-initiated ("create an agent that reviews SQL"): the purpose is
+// already known, so the conversation starts at the provider question.
+export async function startCreateWithPurpose(purpose, ctx, fleetSnapshot, name = null) {
+  const conv = startCreate(fleetSnapshot);
+  const first = await answerCreate(conv, purpose, ctx);
+  if (name && first.stage !== "purpose") {
+    first.prompt = first.prompt.replace(conv.name, name);
+    conv.name = name;
+  }
+  return { conv, ...first };
+}
+
 export function startCreate(fleetSnapshot) {
   const id = `boot_${Date.now().toString(36)}_${(bootSeq++).toString(36)}`;
   const conv = {

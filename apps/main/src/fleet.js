@@ -8,6 +8,8 @@ import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 import { refreshForms, pendingForms } from "./forms.js";
 import { chains, publicChain } from "./worktrees.js";
 import { projectDir } from "./project.js";
+import { WORKER_GUARDRAIL } from "./playbooks.js";
+import { WORKER_SESSION_RULES } from "./policy.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -324,7 +326,7 @@ export function handleFleetEvent(ev, emit) {
       if (d.delta) w.reasoning += typeof d.delta === "string" ? d.delta : d.delta.text ?? "";
       break;
     case "permission.asked": {
-      const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [] };
+      const req = { requestID: d.id, sessionID: sid, action: d.action, resources: d.resources ?? [], save: d.save ?? [], at: Date.now() };
       w.pending = req;
       w.state = "permission";
       pendingPermissions.set(d.id, req);
@@ -383,6 +385,8 @@ export async function spawnWorker(task, opts = {}) {
     model,
     location: { directory },
     title: task.slice(0, 64),
+    // Route every non-read request through Jarvis's autonomy policy.
+    permissions: WORKER_SESSION_RULES,
     // Chain bookkeeping rides on the session so a restart can rebuild it.
     metadata: { jarvis: { task: task.slice(0, 2000), chain: opts.chain ?? null, round, project } },
   });
@@ -396,7 +400,8 @@ export async function spawnWorker(task, opts = {}) {
   w.round = round;
   w.promptedAt = Date.now();
   await ensureFleetPump(opts.onEvent);
-  await client.session.prompt({ sessionID: session.id, text: task });
+  // Every worker gets the untrusted-content guardrail with its task.
+  await client.session.prompt({ sessionID: session.id, text: `${task}\n\n${WORKER_GUARDRAIL}` });
   return { sessionID: session.id, model };
 }
 
@@ -456,7 +461,7 @@ export async function deleteWorker(sessionID) {
   return { ok: true };
 }
 
-export async function replyPermission(requestID, decision) {
+export async function replyPermission(requestID, decision, message) {
   // decision: "allow" | "deny" -> "once" | "reject". Never "always" without Step-5 confirm.
   const { client } = await ensureClient();
   const pending = pendingPermissions.get(requestID);
@@ -465,6 +470,7 @@ export async function replyPermission(requestID, decision) {
     sessionID: pending.sessionID,
     requestID,
     decision: decision === "allow" ? "once" : "reject",
+    ...(message ? { message } : {}),
   });
   return out;
 }
@@ -481,6 +487,39 @@ export function latestSettledChain() {
   return null;
 }
 
+// Fleet housekeeping: "clean up the completed and failed workers".
+export const FINISHED_STATES = ["done", "failed", "stopped"];
+export function matchFleetCommand(text) {
+  const t = String(text ?? "").toLowerCase().replace(/[.!?,]+/g, " ").replace(/\s+/g, " ").trim();
+  const m = t.match(/^(?:please )?(?:clean ?up|clear(?: out)?|remove|delete|get rid of|tidy(?: up)?|prune)(?: all)?(?: of)?(?: the| my)?(?: (.+?))? (?:workers?|agents?|sessions?|fleet|ring)(?: from the (?:fleet|ring))?(?: please)?$/);
+  if (!m) return null;
+  const words = m[1] ?? "";
+  if (/\b(?:running|working|active|busy)\b/.test(words)) return null; // never by phrase
+  const states = new Set();
+  if (/\b(?:completed?|finished|done|successful)\b/.test(words)) states.add("done");
+  if (/\b(?:failed|failing|errored|broken|dead)\b/.test(words)) states.add("failed");
+  if (/\b(?:stopped|cancel+ed|aborted)\b/.test(words)) states.add("stopped");
+  if (/\b(?:old|idle|finished)\b/.test(words) || !states.size) FINISHED_STATES.forEach((s) => states.add(s));
+  return { states: FINISHED_STATES.filter((s) => states.has(s)) };
+}
+
+// Which workers a cleanup removes: only finished ones, in this project.
+export function cleanupTargets(list, states, dir) {
+  const want = new Set((states ?? []).filter((s) => FINISHED_STATES.includes(s)));
+  return list.filter((w) => want.has(w.state) && (!dir || !w.project || w.project === dir)).map((w) => w.sessionID);
+}
+
+export async function cleanupWorkers(states, dir = projectDir()) {
+  const ids = cleanupTargets([...workers.values()], states, dir);
+  const removed = [];
+  const errors = [];
+  for (const id of ids) {
+    try { await deleteWorker(id); removed.push(id); }
+    catch (err) { errors.push(`${id.slice(0, 8)}: ${String(err.message ?? err).slice(0, 80)}`); }
+  }
+  return { removed, errors };
+}
+
 export function chainBusy(chainID) {
   return [...workers.values()].some((x) => x.chain === chainID && ["working", "permission"].includes(x.state));
 }
@@ -492,10 +531,15 @@ export function latestActiveWorker() {
 
 // Pure routing: control phrase vs model prompt. Main decides; flaky transcripts cannot eval.
 export function routeUtterance(text, hasPending = pendingPermissions.size > 0, hasConfigPending = pendingConfigs.size > 0, formAnswer = null) {
-  const t = String(text ?? "").trim().toLowerCase();
+  // Speech engines punctuate ("Use the amber accent.", "Allow."); local
+  // commands match on the bare words.
+  text = String(text ?? "").trim().replace(/[.!?…]+$/, "").trim();
+  const t = text.toLowerCase();
   if (hasPending) {
-    if (/^(allow|yes|approve|grant)(\s+once)?$/.test(t)) return { route: "permission", decision: "allow" };
-    if (/^(deny|no|reject|block)$/.test(t)) return { route: "permission", decision: "deny" };
+    // Spoken answers to "the worker wants to run X — allow it?"
+    const said = t.replace(/[,!]/g, " ").replace(/\s+/g, " ").trim();
+    if (/^(?:(?:yes|yeah|yep|sure|ok|okay|allow|approve|grant|go ahead|do it|run it|fine)(?: (?:it|that|once|please|go ahead|do it|run it|allow it|jarvis))*)$/.test(said)) return { route: "permission", decision: "allow" };
+    if (/^(?:(?:no|nope|deny|reject|block|don't|do not|cancel|decline)(?: (?:it|that|please|don't|do it|run it|allow it|jarvis))*)$/.test(said)) return { route: "permission", decision: "deny" };
   }
   if (formAnswer) return { route: "form.answer", answer: formAnswer };
   if (hasConfigPending) {
@@ -508,6 +552,8 @@ export function routeUtterance(text, hasPending = pendingPermissions.size > 0, h
   if (cfg && !isWidening(cfg)) return { route: "config.apply", spec: cfg };
   if (cfg && isWidening(cfg)) return { route: "config.stage", spec: cfg };
   if (/^stop( the)? worker$/.test(t)) return { route: "stop-worker" };
+  const fleetCmd = matchFleetCommand(text);
+  if (fleetCmd) return { route: "fleet.cleanup", ...fleetCmd };
   let m;
   if ((m = t.match(/^(land|merge|keep|discard)( it| the work| the changes| the branch)?$/))) {
     return { route: "chain.action", action: m[1] === "merge" ? "land" : m[1] };

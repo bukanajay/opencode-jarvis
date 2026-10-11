@@ -13,6 +13,8 @@ import { projectDir, projectName } from "../project.js";
 import { speechFor } from "../speech.js";
 import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
+import { parseJarvisActions, ACTIONS_DOC } from "../actions.js";
+import { normalizeFences, splitInlineFence, OPEN_FENCE_LINE, CLOSED_FENCE_LINE, CLOSE_FENCE_LINE } from "../fences.js";
 
 const brainSessions = new Map(); // directory -> sessionID
 let brainModelUsed = null;
@@ -74,6 +76,9 @@ const BrainState = Annotation.Root({
   facts: Annotation({ reducer: (_a, b) => b, default: () => [] }),
   dispatches: Annotation({ reducer: (_a, b) => b, default: () => [] }),
   warnings: Annotation({ reducer: (_a, b) => b, default: () => [] }),
+  context: Annotation({ reducer: (_a, b) => b, default: () => "" }),
+  actions: Annotation({ reducer: (_a, b) => b, default: () => [] }),
+  ephemeral: Annotation({ reducer: (_a, b) => b, default: () => false }),
 });
 
 // Act convention: think may emit single-line ```dispatch {"task": "...", "agent": "optional-id"}```
@@ -82,13 +87,13 @@ const BrainState = Annotation.Root({
 // can hold them back and the transcript stays readable. Only these shapes
 // execute; everything else is words. Malformed fences are ignored with a
 // warning, never executed.
-const FENCE_RE = /^```(dispatch|followup|speak)\s+(.+?)\s*```[ \t]*$/gm;
-const DISPATCH_LINE = /^\s*```(?:dispatch|followup|speak)\s+\{.*\}\s*```\s*$/;
+const FENCE_RE = /^```(dispatch|followup|speak|jarvis)\s+(.+?)\s*```[ \t]*$/gm;
+const DISPATCH_LINE = /^\s*```(?:dispatch|followup|speak|jarvis)\s+\{.*\}\s*```\s*$/;
 
 function parseFences(reply, kind, allowed) {
   const out = [];
   const warnings = [];
-  for (const m of String(reply ?? "").matchAll(FENCE_RE)) {
+  for (const m of normalizeFences(reply).matchAll(FENCE_RE)) {
     if (m[1] !== kind) continue;
     let spec;
     try {
@@ -127,26 +132,44 @@ export function parseFollowups(reply) {
 }
 
 export function stripDispatches(reply) {
-  return String(reply ?? "").split("\n").filter((ln) => !DISPATCH_LINE.test(ln)).join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return normalizeFences(reply).split("\n").filter((ln) => !DISPATCH_LINE.test(ln)).join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Incremental streamer: forwards complete non-fence lines, holds fence lines
 // and partial lines back. flush() emits the tail (unless it is a fence).
 export function fencedFilter(forward) {
   let buf = "";
+  let openFence = false; // saw ```kind {...} without its closing ``` yet
+  const keep = (ln) => {
+    if (openFence) {
+      openFence = false;
+      if (CLOSE_FENCE_LINE.test(ln)) return false;
+    }
+    if (DISPATCH_LINE.test(ln) || CLOSED_FENCE_LINE.test(ln)) return false;
+    if (OPEN_FENCE_LINE.test(ln)) { openFence = true; return false; }
+    return true;
+  };
+  // "On it.```dispatch {...}```" -> forward "On it.", hold the fence.
+  const emit = (ln, nl) => {
+    const [text, fence] = splitInlineFence(ln);
+    if (fence) {
+      forward(text + "\n");
+      if (keep(fence) && nl) forward(fence + "\n");
+      return;
+    }
+    if (keep(ln)) forward(ln + (nl ? "\n" : ""));
+  };
   return {
     push(chunk) {
       buf += String(chunk ?? "");
       const lines = buf.split("\n");
       buf = lines.pop();
-      for (const ln of lines) {
-        if (DISPATCH_LINE.test(ln)) continue;
-        forward(ln + "\n");
-      }
+      for (const ln of lines) emit(ln, true);
     },
     flush() {
-      if (buf && !DISPATCH_LINE.test(buf)) forward(buf);
+      if (buf) emit(buf, false);
       buf = "";
+      openFence = false;
     },
   };
 }
@@ -156,14 +179,26 @@ export function fencedFilter(forward) {
 // transcript; speechFor() falls back to a local summary if this is missing.
 export const VOICE_ADDENDUM = `The user is listening by voice. Also add exactly one single-line fence with what you would SAY out loud: one or two short plain sentences (under 40 words) summarising your reply, no code, file paths, symbols or markdown:\n\`\`\`speak {"text": "<spoken summary>"}\`\`\`\n`;
 
-export function buildThinkPrompt(text, memories, registry, project = null, { voice = false } = {}) {
+// The brain sometimes answers "I can't access your shell, run X yourself"
+// instead of delegating. With no dispatch fence, that is a dropped task:
+// Main hands the request to a worker anyway (workers have the shell).
+const NO_ACCESS_RE = /\b(?:can(?:no|')t|cannot|unable to|don'?t have|do not have|no)\b[^.\n]{0,60}\b(?:shell|terminal|command line|run (?:commands?|that|this|it)|execute|access to your (?:mac|machine|computer|system)|system-wide|installed (?:apps|applications))\b/i;
+const RUN_IT_YOURSELF_RE = /\b(?:run|try)\b[^.\n]{0,40}\bin your (?:terminal|shell)\b/i;
+export function needsWorkerFallback(reply, dispatches = []) {
+  if ((dispatches ?? []).length > 0) return false;
+  const t = String(reply ?? "").replace(/[\u2018\u2019]/g, "'");
+  return NO_ACCESS_RE.test(t) || RUN_IT_YOURSELF_RE.test(t);
+}
+
+export function buildThinkPrompt(text, memories, registry, project = null, { voice = false, userName = "", context = "" } = {}) {
+  const nameLine = userName ? `The user's name is ${userName}; use it naturally now and then, not in every reply. ` : "";
   const projLine = project?.dir ? `Current project: ${project.name} (${project.dir}). ` : "";
   const memLine = memories.length > 0
     ? `What you remember about the user:\n- ${memories.join("\n- ")}\n` : "";
   const fleetLine = (registry ?? []).length > 0
     ? `Fleet agents you can delegate to: ${(registry ?? []).map((a) => `${a.id}${a.description ? ` (${a.description.slice(0, 80)})` : ""}`).join("; ")}. Omit "agent" to let routing decide.\n`
     : `No fleet agents exist yet; do not emit dispatch fences, say what you need instead.\n`;
-  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands. When the user asks you to CHANGE or RUN something (edit, fix, implement, run tests, build), you MUST delegate with a fence or the task is dropped. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a dispatch fence. ${voice ? VOICE_ADDENDUM : ""}User: ${text}`;
+  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${nameLine}${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands yourself, but your workers can: they have the full tool set (shell, edit, web) on the user's machine, and anything risky comes back to the user as a permission prompt they answer on the card or by voice. So whenever a request needs anything beyond reading the project — changing or running something (edit, fix, implement, run tests, build), or checking the machine itself (is a tool installed, versions, env vars, processes, ports, git state, files outside the project) — you MUST delegate with a fence or the task is dropped. Never tell the user to run a command themselves and never say you lack shell access: delegate instead. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a dispatch fence.\n${ACTIONS_DOC}${context ? `Right now:\n${context}\n` : ""}${voice ? VOICE_ADDENDUM : ""}User: ${text}`;
 }
 
 // One streamed turn on the brain session, fences held back from the stream.
@@ -198,9 +233,9 @@ function buildGraph(handlers) {
   g.addNode("think", async (state) => {
     const { client } = await ensureClient();
     const registry = await getFleetRegistry(client, projectDir()).catch(() => []);
-    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice });
+    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice, userName: loadStore().settings.userName, context: state.context });
     const r = await brainTurn(prompt, handlers.onDelta, state.files);
-    return { reply: r.text, status: r.status };
+    return { reply: normalizeFences(r.text), status: r.status };
   });
   g.addNode("act", async (state) => {
     // Parse only; execution belongs to main (shared dispatchTask), which owns
@@ -209,9 +244,11 @@ function buildGraph(handlers) {
     if (state.status !== "ok") return { dispatches: [], warnings: [] };
     const { dispatches, warnings } = parseDispatches(state.reply);
     const speak = state.voice ? speechFor(state.reply) : null;
-    return { reply: stripDispatches(state.reply), dispatches, warnings, speak };
+    const acts = parseJarvisActions(state.reply);
+    return { reply: stripDispatches(state.reply), dispatches, warnings: [...warnings, ...acts.warnings], speak, actions: acts.actions };
   });
   g.addNode("persist", async (state) => {
+    if (state.ephemeral) return { facts: [] }; // briefs and routines are not the user talking
     // "remember for this project …" goes to project memory; everything else
     // the heuristics catch is about the user and stays global.
     const saved = [];
@@ -235,9 +272,9 @@ function buildGraph(handlers) {
 export function brainRespond(text, onDelta, opts = {}) {
   return serialize(async () => {
     compiled = buildGraph({ onDelta });
-    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true });
+    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true, context: opts.context ?? "", ephemeral: opts.ephemeral === true });
     compiled = null;
-    return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [], speak: out.speak ?? null };
+    return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [], speak: out.speak ?? null, actions: out.actions ?? [] };
   });
 }
 

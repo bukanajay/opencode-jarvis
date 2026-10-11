@@ -12,7 +12,11 @@ export const READONLY_PERMISSIONS = ["edit", "write", "patch", "bash", "shell", 
   effect: "deny",
 }));
 
-export const BRAIN_AGENT = process.env.JARVIS_BRAIN_AGENT || "plan";
+// The deny rules above (plus runTurn auto-rejecting asks) are what keep the
+// brain read-only. The agent is "build", not "plan": plan injects a "you are
+// in Plan mode" reminder that made Jarvis tell the user to switch modes
+// instead of delegating or managing its fleet.
+export const BRAIN_AGENT = process.env.JARVIS_BRAIN_AGENT || "build";
 
 export function isQuotaError(error) {
   return /quota|rate-limit|429/i.test(JSON.stringify(error ?? ""));

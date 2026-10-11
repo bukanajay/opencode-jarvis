@@ -26,9 +26,15 @@ let missing = 0;
 for (const f of files.filter((f) => f.startsWith(path.join("apps", "main", "src")))) {
   const src = fs.readFileSync(f, "utf8");
   for (const m of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*"(\.[^"]+)"/g)) {
-    const mod = await import(pathToFileURL(path.resolve(path.dirname(f), m[2])).href);
+    const target = path.resolve(path.dirname(f), m[2]);
+    const tsrc = fs.readFileSync(target, "utf8");
+    // Modules that import Electron cannot load under plain node: read their
+    // export declarations instead of importing them.
+    const exported = /from\s*"electron"/.test(tsrc)
+      ? new Set([...tsrc.matchAll(/export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/g)].map((x) => x[1]))
+      : new Set(Object.keys(await import(pathToFileURL(target).href)));
     for (const name of m[1].split(",").map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean)) {
-      if (!(name in mod)) { console.error(`${f}: ${name} is not exported by ${m[2]}`); missing++; }
+      if (!exported.has(name)) { console.error(`${f}: ${name} is not exported by ${m[2]}`); missing++; }
     }
   }
 }

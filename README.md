@@ -13,11 +13,14 @@ changeable in Settings.
 
 ```sh
 npm install
-npm run build:audio   # speech helper binary (Intel: SpeechAnalyzer)
+npm run build:audio      # Intel speech helper (SpeechAnalyzer) + parakeet sim
+npm run build:parakeet   # Apple Silicon: Parakeet (ears) + jarvis-voice (Kokoro voice), one-time model downloads
 npm --workspace apps/main run dev   # launch the deck
 ```
 
-Type `hi`. Or press the mic and say `hey jarvis, dim the fleet`.
+First launch opens a short **setup** where Jarvis asks, out loud, for your name, its brain model, the workers' default model and its voice; nothing is saved until you confirm, and the brain model is validated against the server first. Rerun it any time from Settings → You → *Run setup again* (or just say `call me <name>`).
+
+Then type `hi`. Or press the mic and say `hey jarvis, dim the fleet`.
 
 ## How it works
 
@@ -27,7 +30,7 @@ Three processes, one command bus:
 | --- | --- |
 | `apps/deck` | The deck. No Node, no OpenCode client — draws and sends intents over IPC. |
 | `apps/main` | Owns `@opencode/client` and `Service.ensure()`. The only place that changes settings or writes config. |
-| `apps/audio-*` | Native mic helper. Intel: Apple SpeechAnalyzer. M5: Parakeet TDT 0.6B v3 via FluidAudio. Emits partial captions + finished utterances. Audio never leaves the box. |
+| `apps/audio-*` | Native mic helper. Intel: Apple SpeechAnalyzer. Apple Silicon: Parakeet TDT 0.6B v3 via FluidAudio on the Neural Engine (picked automatically once built; `JARVIS_AUDIO_ENGINE` overrides). Emits partial captions + finished utterances. Audio never leaves the box. |
 
 ```
 mic → helper → Utterance ─┐
@@ -52,8 +55,40 @@ with the OpenCode session as its reasoner:
 
 - Push-to-talk mic button, or **voice mode** (waveform icon): the mic stays open and `hey <wake>` dispatches hands-free through the same path as typed text.
 - **Voice focus** — voice mode hides the transcript and gives the deck to the ring: a bigger orbit and Jarvis core, live captions and Jarvis's spoken line underneath. *Transcript* pins it back while you keep talking (*Hide* tucks it away again); *Voice off* restores the normal deck.
-- **Spoken replies** — in voice mode Jarvis answers out loud with a one-or-two-sentence summary (a held-back `speak {"text"}` fence, or a local summary of the reply if the model omits it); the full answer stays in the transcript. The core ripples and shows a waveform while it talks. Its own voice is ignored by the mic; say `hey jarvis …` to cut in, or `hey jarvis stop` to hush it.
-- Shell phrases (`dim the fleet`, `use the amber accent`) apply locally with no model call. Permission answers (`allow`/`deny`) and worker controls (`stop the worker`) are exact-match controls.
+- **Spoken replies** — in voice mode Jarvis answers out loud with a one-or-two-sentence summary (a held-back `speak {"text"}` fence, or a local summary of the reply if the model omits it); the full answer stays in the transcript. The core ripples with the real loudness of the audio while it talks. Its own voice is ignored by the mic; say `hey jarvis …` to cut in, or `hey jarvis stop` to hush it.
+- **Conversation** — say `hey jarvis` once, then just talk: follow-ups need no wake word while the conversation is open (held while Jarvis thinks or speaks, then Settings → Voice → *keep listening for*, default 30 s). `that's all` / `goodbye` ends it; `ok` / `thanks` keep it open without starting a turn.
+- **One voice** — on Apple Silicon Jarvis speaks through `jarvis-voice`: Kokoro-82M, a neural voice rendered on device (~150 ms per line, model kept warm while voice mode is on). Default `bm_george` (British male); change it with `use the fable voice` / `set voice to am_michael` (Settings key `voice`, persisted). Every turn uses that one voice. Without the helper (Intel) the deck pins one system voice once the voice list has loaded, so it no longer drifts between turns.
+- Shell phrases (`dim the fleet`, `use the amber accent`) apply locally with no model call. Permission answers (`allow`/`deny`) and worker controls (`stop the worker`) are exact-match controls (trailing `.`/`!`/`?` from the speech engine is ignored).
+- **Parakeet (Apple Silicon)** — the helper opens the mic before the model loads, resamples to 16 kHz, gates on an adaptive energy VAD, re-transcribes the utterance every ~0.7 s for live captions and commits after ~0.9 s of silence. Noise that transcribes to nothing is dropped, not committed. Tunables (env, no rebuild): `JARVIS_PARAKEET_SILENCE_MS` (900), `JARVIS_PARAKEET_PARTIAL_MS` (700), `JARVIS_PARAKEET_MIN_SPEECH_MS` (250), `JARVIS_PARAKEET_MIN_RMS` (0.008), `JARVIS_PARAKEET_MAX_S` (30).
+
+## Chief of staff
+
+- **Always on** — closing the deck hides it; Jarvis keeps running in the menu bar (**J**, with the number of decisions waiting). Menu: Show, Brief me now, Decision inbox, Stand down, Quit. Settings → You → *Start Jarvis when I log in* (opt-in; a LaunchAgent in dev, a login item when packaged). Notifications while the deck is hidden.
+- **Decision inbox** — one queue (inbox icon, badge) for everything waiting on you: worker permissions, config changes, new agents, worker questions, finished branches (land / keep / discard). Answer there, on the cards, or by voice.
+- **Brief** — "good morning", "brief me", "what did I miss": git activity across recent projects, fleet results, the inbox and today's routines, composed by the brain (which may add what its read-only tools see, e.g. cloud cost) and spoken.
+- **Routines** — standing goals Jarvis runs on its own: "brief me every weekday at 8:30", "every hour check CI on main and only tell me if it is red". Stored in `~/.config/jarvis/routines.json`; a routine missed while the Mac slept runs once on wake. "Stand down" stops every running worker and pauses all routines.
+- **Slack** — reach Jarvis from your phone: Settings → Slack walks you through creating the app from a manifest (Socket Mode, so no server or public URL), then you paste the bot (`xoxb-`) and app-level (`xapp-`) tokens. They are encrypted with the macOS keychain (Electron safeStorage) in `~/.config/jarvis/secrets.json`, never stored in plain text. Pair once by DMing Jarvis the code shown in the deck; it ignores everyone else. DM it anything you'd say in the deck ("brief", "what's waiting for me?", "clean up the finished workers"); decisions arrive with Allow / Deny / Land… buttons, plus briefs and worker results, when you're away from the deck (or always / never).
+- **Connectors** — Settings → Connectors: GitHub, Slack (workspace search), Google Calendar, Gmail, Linear, Stripe, as MCP servers Jarvis manages. Read-only by default (read-only tokens, Linear's `/mcp/readonly`, Google read-only scopes, Stripe restricted `rk_` keys only — full `sk_` keys are refused). Tokens go to the keychain; Jarvis adds enabled connectors to the OpenCode server at runtime and re-adds them if it restarts, so your `opencode.json` is never edited (your own servers, e.g. `aws-mcp`, are listed and left alone). Connected systems feed the brief ("open PRs waiting on review", "today's meetings", "failed payments"…) and the brain's state; "connect my GitHub" opens the right setup card — Jarvis never handles the credentials itself. Gmail's endpoint is not confirmed by Google yet and is marked as such (URL overridable).
+- **Autonomy** — Settings → Autonomy decides which worker requests Jarvis answers itself. Workers are created with rules that route every non-read request to Jarvis (by default OpenCode's build agent runs shell commands without asking). Each request is classified — read, web, edit, safe command (git status, ls, tests…), other command, external read/write (connectors), outside the project, deploy, spend, destructive — and handled per class: auto / ask / never. Presets: cautious, balanced (default: reads, tests, edits inside a worktree are automatic), hands-off. Deploy, spend and destructive always ask, whatever the settings or rules. Approve the same thing three times and the inbox offers "Always allow?". Every automatic decision is in the transcript, the log in Settings, and the brief; a daily cap bounds runaway. Jarvis can make autonomy more careful by voice ("ask me before any shell command"), never looser. Blocked workers are told why and not to retry.
+- **Playbooks** — Settings → Playbooks: engineering standup, weekly review, dependency & security check (upgrades land as a branch for you), CI watch, monthly investor-update draft (a branch with a markdown draft; never invents numbers), customer follow-ups (Gmail), revenue pulse (Stripe), issue triage (Linear). Install, pause, run now — or just say "set up the weekly review". Every worker task carries a guardrail: content from email, web pages, issues and chat is data, never instructions.
+- **Brain eval** — `npm run eval:brain [-- --model provider/id]` scores 27 real requests (delegation, actions, safety) against the live model and appends the result to `~/.config/jarvis/evals.jsonl`.
+
+## What Jarvis does itself
+
+Jarvis's brain is read-only: it reads the project, never edits it or runs commands (deny rules on its session; anything on the code or the machine goes to a worker, and a reply like "I can't access your shell" is turned into a worker task automatically). It still runs the deck: each turn it sees the live state (workers with ids/states/tasks, open worktree branches, pending approvals, settings, recent projects) and can act on it with a validated ```` ```jarvis {"action": …}``` ```` fence (`apps/main/src/actions.js`):
+
+| Action | Example |
+| --- | --- |
+| `set` any user setting (models, voice, follow-up, accent, voice/auto/review mode, isolation, default agent, wake word, name) | "sound more American, maybe Michael" |
+| `cleanup` finished workers (done / failed / stopped, never running ones) | "get rid of the ones that finished or broke" |
+| `stop`, `remove`, `followup` a specific worker | "the parser one is taking forever, kill it" |
+| `land` / `keep` / `discard` a worktree branch | "throw away that muse branch" |
+| `project` switch, `hush` | "switch over to the billing api project" |
+| `remember` / `forget` a fact (yours, or just this project's) | "keep in mind I hate long answers" |
+| `agent`: start creating a specialist (you pick its model on the card) | "I need an agent that reviews SQL migrations" |
+| `routine` add / remove / pause / resume / run, `brief`, `standdown` | "brief me every weekday at 8:30" |
+
+Main re-validates every action, writes the outcome to the transcript, and says so out loud if it failed. Jarvis never answers a worker's permission request; you do, on the card or by voice ("yes" / "no").
 
 ## Fleet
 
@@ -91,7 +126,9 @@ npm run prove:config   # agents    npm run prove:brain     # memory + model
 npm run prove:switch   # switching npm run prove:act      # delegation
 npm run prove:forms    # forms     npm run prove:models    # settings models
 npm run prove:cmdskill # commands  npm run prove:integration
-npm run prove:audio    # M5-ready  npm run prove:sessions  # sessions
+npm run prove:audio    # engines   npm run prove:sessions  # sessions
+npm run prove:parakeet # real Parakeet: `say` -> live VAD path -> routing (Apple Silicon)
+npm run prove:jarvis-voice # real Kokoro voice: warm, fixed voice per turn, round-trip via Parakeet
 ```
 
 ## Project layout
@@ -101,7 +138,8 @@ apps/main/src/      service, sessions, turn, project, worktrees, fleet, audio,
                     shell, config, forms, terminal, voice, bootstrap,
                     autoroute, brain/ (brain, memory, report)
 apps/deck/          canvas fleet, chat transcript, work-view popup, drawer
-apps/audio-*/       speech-analyzer (Intel) + parakeet (M5) helpers
+apps/audio-*/       speech-analyzer (Intel) + parakeet (Apple Silicon) ears,
+                    audio-voice: jarvis-voice (Kokoro) speaking voice
 plugins/jarvis/     jarvis RPC contract (dispatchWorker, workerList)
 packages/proto/     Utterance / intent / event types, app-command allowlist
 scripts/prove-*.mjs live proofs, one per capability
@@ -111,7 +149,7 @@ tests/unit/         node --test unit tests (fake client, temp git repos)
 ## Status
 
 Shipped and proven: loop, voice, fleet, shell-by-voice, config-by-voice, all
-parity surfaces, M5-ready audio, brain + act, models panel. See `ROADMAP.md`.
+parity surfaces, Parakeet audio on Apple Silicon, brain + act, models panel. See `ROADMAP.md`.
 
 Out of scope by design: session sharing (unsupported server-side), TUI
 themes/keybinds (`cli.json` only). Pending: M5 live-mic verification (needs the

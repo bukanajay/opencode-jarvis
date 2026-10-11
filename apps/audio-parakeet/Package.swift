@@ -1,20 +1,22 @@
 //swift-tools-version: 6.0
 import PackageDescription
 
-// M5 build: swift build -c release, then copy .build/release/parakeet to bin/parakeet.
-// Intel Macs cannot run this target (FluidAudio is Apple Silicon only);
-// build the sim target instead (see README).
+// Apple Silicon build: npm run build:parakeet (wraps swift build -c release and
+// falls back to plain swiftc when SwiftPM is unusable). Intel Macs cannot run
+// this target (FluidAudio is Apple Silicon only); they use the sim (see README).
 let package = Package(
     name: "parakeet",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.9.0"),
+        .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.9.1"),
     ],
     targets: [
         .executableTarget(
             name: "parakeet",
             dependencies: ["FluidAudio"],
-            path: "src"
+            path: "src",
+            exclude: ["sim.swift"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

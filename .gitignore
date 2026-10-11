@@ -5,3 +5,6 @@ dist/
 apps/audio-speech-analyzer/bin/
 apps/audio-parakeet/bin/
 package-lock.json
+apps/audio-parakeet/.build/
+apps/audio-voice/bin/
+voice-samples/

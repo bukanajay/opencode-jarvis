@@ -1,13 +1,14 @@
 // Spoken replies: what Jarvis says out loud in voice mode, and when the mic
 // may interrupt it. All pure; the deck owns the actual text-to-speech.
 import { hasWake, stripWake } from "./voice.js";
+import { normalizeFences } from "./fences.js";
 
 const SPEAK_RE = /^\s*```speak\s+(\{.*\})\s*```\s*$/m;
 const MAX_SPOKEN = 260;
 
 // The model's own spoken line: ```speak {"text": "..."}``` on a line of its own.
 export function parseSpeak(reply) {
-  const m = String(reply ?? "").match(SPEAK_RE);
+  const m = normalizeFences(reply).match(SPEAK_RE);
   if (!m) return null;
   try {
     const spec = JSON.parse(m[1]);
@@ -57,7 +58,7 @@ export function speechFor(reply) {
 }
 
 export function stripSpeak(reply) {
-  return String(reply ?? "").split("\n").filter((ln) => !/^\s*```speak\s+\{.*\}\s*```\s*$/.test(ln)).join("\n");
+  return normalizeFences(reply).split("\n").filter((ln) => !/^\s*```speak\s+\{.*\}\s*```\s*$/.test(ln)).join("\n");
 }
 
 // While Jarvis is speaking (plus a short tail for room echo) the mic hears
@@ -72,6 +73,16 @@ export function voiceGate(transcript, { speaking, wakeWord = "jarvis" } = {}) {
   if (!hasWake(t, wake)) return "drop";
   const explicit = new RegExp(`^\\s*(?:hey|ok|okay)\\s+${wake.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t);
   return explicit && stripWake(t, wake) !== t.trim() ? "barge" : "drop";
+}
+
+// What Jarvis says when a worker needs approval: who, what, and the question.
+export function permissionLine(request, agent = "") {
+  const action = String(request?.action ?? "something").toLowerCase();
+  const what = (request?.resources ?? []).map(String).filter(Boolean).join(", ").replace(/\s+/g, " ").trim();
+  const short = what.length > 90 ? `${what.slice(0, 87)}…` : what;
+  const who = agent ? `The ${agent} worker` : "A worker";
+  const verb = /bash|shell|command|exec/.test(action) ? "run" : /edit|write|patch/.test(action) ? "edit" : /web|fetch/.test(action) ? "fetch" : `use ${action} on`;
+  return short ? `${who} wants to ${verb} ${short}. Allow it?` : `${who} needs ${action} permission. Allow it?`;
 }
 
 // "hey jarvis stop" / "quiet" / "shut up" while speaking: stop, nothing else.

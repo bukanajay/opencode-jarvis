@@ -75,6 +75,28 @@ export function forget(mem, id) {
   return n !== mem.facts.length;
 }
 
+// "forget that I prefer tabs": the facts whose text best matches the phrase.
+// Exact (case-insensitive) match wins, then containment either way, then
+// shared-word overlap; returns all ties so callers can refuse ambiguity.
+export function matchFacts(mem, phrase) {
+  const want = String(phrase ?? "").trim().toLowerCase();
+  if (!want) return [];
+  const exact = mem.facts.filter((f) => f.text.toLowerCase() === want);
+  if (exact.length) return exact;
+  const contains = mem.facts.filter((f) => f.text.toLowerCase().includes(want) || want.includes(f.text.toLowerCase()));
+  if (contains.length) return contains;
+  const ws = new Set(words(want));
+  if (!ws.size) return [];
+  let best = 0;
+  let hits = [];
+  for (const f of mem.facts) {
+    const fw = new Set(words(f.text));
+    const overlap = [...ws].filter((w) => fw.has(w)).length / Math.max(ws.size, 1);
+    if (overlap > best) { best = overlap; hits = [f]; } else if (overlap === best && overlap > 0) hits.push(f);
+  }
+  return best >= 0.6 ? hits : [];
+}
+
 export function recall(mem, query, limit = 5) {
   return recallSemantic(mem, query, limit);
 }

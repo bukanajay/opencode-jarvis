@@ -22,4 +22,10 @@ Modes every helper implements (no mic needed):
 - `--simulate "some sentence"`: progressive partials, then final.
 - `--stdin`: each line is a partial, a blank line commits the final.
 
+Parakeet-only modes (real model, no mic):
+
+- `--file path`: transcribe an audio file, emit one final.
+- `--replay path`: stream a file through the live VAD/partial/commit path.
+- `--prepare`: download + compile the models, emit `status ready`, exit.
+
 Audio never leaves the box. Only text crosses into Main.

@@ -8,7 +8,7 @@ const ROOT = process.cwd();
 const SA_SRC = path.join(ROOT, "apps/audio-speech-analyzer/src/helper.swift");
 const SA_BIN = path.join(ROOT, "apps/audio-speech-analyzer/bin/speech-analyzer");
 const PQ_SRC = path.join(ROOT, "apps/audio-parakeet/src/sim.swift");
-const PQ_BIN = path.join(ROOT, "apps/audio-parakeet/bin/parakeet");
+const PQ_BIN = path.join(ROOT, "apps/audio-parakeet/bin/parakeet-sim");
 
 await import("node:fs").then((fs) => fs.mkdirSync(path.dirname(PQ_BIN), { recursive: true }));
 for (const [src, bin] of [[SA_SRC, SA_BIN], [PQ_SRC, PQ_BIN]]) {
@@ -25,7 +25,7 @@ const { listenOnce, toUtterance, resolveEngine } = await import("../apps/main/sr
 const { routeUtterance } = await import("../apps/main/src/fleet.js");
 
 try { resolveEngine("bogus"); throw new Error("no throw"); } catch (e) { if (!/unknown audio engine/.test(e.message)) throw e; }
-console.log("engine-ok: unknown engines rejected, speech-analyzer default");
+console.log("engine-ok: unknown engines rejected");
 
 // Same sentence, both engines, same path.
 const results = {};
