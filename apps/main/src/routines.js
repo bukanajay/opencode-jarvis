@@ -55,8 +55,14 @@ export function parseTime(t) {
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
-// Schedule: { at: "HH:MM", days: [0..6] } or { everyMinutes: n } (5..1440).
-export function normalizeSchedule({ time, days, everyMinutes } = {}) {
+// Schedule: { at: "HH:MM", days: [0..6] }, { at, monthDay: 1..31 } (monthly;
+// short months use their last day) or { everyMinutes: n } (5..1440).
+export function normalizeSchedule({ time, days, everyMinutes, monthDay } = {}) {
+  if (monthDay != null) {
+    const d = Math.round(Number(monthDay));
+    if (!(d >= 1 && d <= 31)) throw new Error("monthDay: 1 to 31");
+    return { at: parseTime(time), monthDay: d };
+  }
   if (everyMinutes != null) {
     const n = Math.round(Number(everyMinutes));
     if (!(n >= 5 && n <= 1440)) throw new Error("every: 5 to 1440 minutes");
@@ -70,6 +76,16 @@ export function nextRun(schedule, from) {
   if (schedule.everyMinutes) return from + schedule.everyMinutes * 60000;
   const [h, m] = schedule.at.split(":").map(Number);
   const d = new Date(from);
+  if (schedule.monthDay) {
+    for (let k = 0; k < 3; k++) {
+      const y = d.getFullYear();
+      const mo = d.getMonth() + k;
+      const last = new Date(y, mo + 1, 0).getDate();
+      const c = new Date(y, mo, Math.min(schedule.monthDay, last), h, m, 0, 0);
+      if (c.getTime() > from) return c.getTime();
+    }
+    return null;
+  }
   for (let i = 0; i < 8; i++) {
     const c = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i, h, m, 0, 0);
     if (c.getTime() > from && schedule.days.includes(c.getDay())) return c.getTime();
@@ -90,16 +106,17 @@ export function dueRoutines(routines, now) {
 
 export function describeSchedule(s) {
   if (s.everyMinutes) return s.everyMinutes % 60 === 0 ? `every ${s.everyMinutes / 60}h` : `every ${s.everyMinutes} min`;
+  if (s.monthDay) return `monthly on day ${s.monthDay} at ${s.at}`;
   const days = s.days.join(",") === "1,2,3,4,5" ? "weekdays" : s.days.length === 7 ? "daily" : s.days.join(",") === "0,6" ? "weekends" : s.days.map((d) => DAY_NAMES[d]).join(",");
   return `${days} at ${s.at}`;
 }
 
-export function addRoutine(store, { title, kind = "prompt", prompt = "", time, days, everyMinutes }, now = Date.now()) {
+export function addRoutine(store, { title, kind = "prompt", prompt = "", time, days, everyMinutes, monthDay, playbook }, now = Date.now()) {
   const t = String(title ?? "").trim().slice(0, 80);
   if (!t) throw new Error("routine: title required");
   if (!KINDS.includes(kind)) throw new Error(`routine: kind is ${KINDS.join("|")}`);
   if (kind === "prompt" && !String(prompt).trim()) throw new Error("routine: prompt required");
-  const schedule = normalizeSchedule({ time, days, everyMinutes });
+  const schedule = normalizeSchedule({ time, days, everyMinutes, monthDay });
   const r = {
     id: `rt_${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     title: t,
@@ -109,6 +126,7 @@ export function addRoutine(store, { title, kind = "prompt", prompt = "", time, d
     enabled: true,
     createdAt: now,
     lastRun: null,
+    ...(playbook ? { playbook } : {}),
   };
   store.routines.push(r);
   saveRoutines(store);

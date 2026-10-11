@@ -138,6 +138,12 @@
   .cn-purpose, .cn-help { color: var(--dim); font-size: 12px; }
   .cn-form { display: grid; gap: 6px; }
   .cn-form input[type=text], .cn-form input[type=password] { width: 100%; }
+  .au-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+  .au-grid select { padding: 4px 6px; }
+  .au-lock { color: var(--dim); font-family: var(--cap); font-size: 10.5px; }
+  .au-log { font-family: var(--cap); font-size: 11px; color: var(--dim); display: grid; gap: 3px; max-height: 180px; overflow: auto; }
+  .au-log .deny { color: var(--danger); }
+  .pb-team { font-family: var(--cap); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-top: 10px; }
   #drawer details { margin: 0; }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
   #ring-wrap { position: relative; }
@@ -456,6 +462,28 @@
     <p class="res">Company systems Jarvis can read for briefs, the inbox and your questions. Read-only by default; anything that writes goes through a worker and your approval. Tokens are kept in the macOS keychain and added to OpenCode at runtime (your opencode.json is not edited).</p>
     <div id="cn-list"></div>
     <div class="res" id="cn-yours"></div>
+    </div>
+  </details>
+  <details id="autonomy-settings">
+    <summary>Autonomy <span class="res" id="au-sum"></span></summary>
+    <div class="body">
+    <p class="res">What workers may do without asking you. Jarvis can make this more careful by itself, never less. Deploy, spend and destructive actions always ask.</p>
+    <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="au-on" style="width:auto" /> Let Jarvis answer routine requests itself</label></p>
+    <p><label class="res">Preset<br /><select id="au-preset" style="width:100%"><option value="cautious">Cautious — only reading is automatic</option><option value="balanced">Balanced — edits in worktrees, tests, reads</option><option value="hands-off">Hands-off — also other shell commands</option></select></label></p>
+    <div class="au-grid" id="au-classes"></div>
+    <p class="res" style="margin-top:10px">Rules</p>
+    <div id="au-rules" class="res"></div>
+    <p class="res" style="margin-top:10px">Recent decisions</p>
+    <div class="au-log" id="au-log"></div>
+    <div class="res" id="au-note"></div>
+    </div>
+  </details>
+  <details id="playbook-settings">
+    <summary>Playbooks <span class="res" id="pb-sum"></span></summary>
+    <div class="body">
+    <p class="res">Operations you hand to Jarvis once. Anything that changes something arrives as a branch or a draft in your inbox.</p>
+    <div id="pb-list"></div>
+    <div class="res" id="pb-note"></div>
     </div>
   </details>
   <details id="voice-settings" open>
@@ -1813,8 +1841,8 @@
   // Decision inbox: one queue for everything waiting on you (permissions,
   // config changes, agent creation, questions, finished branches). Main builds
   // it from live state; answering here is the same as answering the card.
-  const IB_LABEL = { permission: "permission", config: "config change", form: "question", agent: "new agent", branch: "branch ready" };
-  const IB_BTN = { allow: ["Allow", ""], deny: ["Deny", "danger"], confirm: ["Confirm", ""], cancel: ["Cancel", "danger"], land: ["Land", ""], keep: ["Keep branch", "ghost"], discard: ["Discard", "danger"], open: ["Open", "ghost"] };
+  const IB_LABEL = { permission: "permission", config: "config change", form: "question", agent: "new agent", branch: "branch ready", rule: "autonomy" };
+  const IB_BTN = { allow: ["Allow", ""], deny: ["Deny", "danger"], confirm: ["Confirm", ""], cancel: ["Cancel", "danger"], land: ["Land", ""], keep: ["Keep branch", "ghost"], discard: ["Discard", "danger"], open: ["Open", "ghost"], always: ["Always allow", ""], dismiss: ["Not now", "ghost"] };
   function paintInbox(items) {
     const n = items.length;
     const badge = $("inbox-badge");
@@ -1987,6 +2015,82 @@
     setTimeout(() => $(`cn-${id}`)?.scrollIntoView({ block: "center" }), 60);
   });
   window.jarvis?.connectorsList?.().then(paintConnectors).catch(() => {});
+  // Autonomy panel: master switch, preset, per-class modes, rules, log.
+  const AU_MODES = { auto: "auto", ask: "ask me", never: "never" };
+  function paintAutonomy(v) {
+    if (!v) return;
+    $("au-on").checked = !!v.enabled;
+    $("au-preset").value = v.preset;
+    $("au-sum").textContent = v.enabled ? `· ${v.preset}, ${v.today} auto today` : "· paused";
+    const grid = $("au-classes");
+    grid.innerHTML = "";
+    for (const c of v.classes) {
+      const lab = document.createElement("span"); lab.textContent = c.label;
+      grid.appendChild(lab);
+      if (c.locked) { const l = document.createElement("span"); l.className = "au-lock"; l.textContent = c.mode === "never" ? "never" : "always asks"; grid.appendChild(l); continue; }
+      const sel = document.createElement("select");
+      for (const m of ["auto", "ask", "never"]) { const o = document.createElement("option"); o.value = m; o.textContent = AU_MODES[m]; sel.appendChild(o); }
+      sel.value = c.mode;
+      sel.disabled = !v.enabled;
+      sel.onchange = () => auChange({ op: "class", class: c.id, mode: sel.value });
+      grid.appendChild(sel);
+    }
+    const rules = $("au-rules");
+    rules.innerHTML = v.rules.length ? "" : "None yet. After you approve the same thing three times, Jarvis offers one.";
+    for (const r of v.rules) {
+      const row = document.createElement("div"); row.className = "row"; row.style.justifyContent = "space-between";
+      const t = document.createElement("span"); t.textContent = `${r.decision === "deny" ? "Never" : "Always"} ${r.label}${r.uses ? ` · used ${r.uses}×` : ""}`;
+      const x = document.createElement("button"); x.type = "button"; x.className = "ghost"; x.textContent = "Remove";
+      x.onclick = () => auChange({ op: "removeRule", id: r.id });
+      row.append(t, x); rules.appendChild(row);
+    }
+    const log = $("au-log");
+    log.innerHTML = "";
+    for (const d of v.recent) {
+      if (d.decision === "policy") continue;
+      const e = document.createElement("div");
+      e.className = d.decision === "deny" ? "deny" : "";
+      const when = new Date(d.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      e.textContent = `${when} ${d.by === "jarvis" ? "auto" : "you"} ${d.decision} · ${d.class ?? ""} ${String(d.what ?? d.signature ?? "").slice(0, 60)}`;
+      log.appendChild(e);
+    }
+    if (!log.children.length) log.textContent = "Nothing yet.";
+  }
+  async function auChange(change) {
+    try { paintAutonomy(await window.jarvis.autonomyChange(change)); $("au-note").textContent = ""; }
+    catch (e) { $("au-note").textContent = String(e.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ""); window.jarvis.autonomyGet().then(paintAutonomy); }
+  }
+  $("au-on").onchange = (e) => auChange({ op: e.target.checked ? "resume" : "pause" });
+  $("au-preset").onchange = (e) => auChange({ op: "preset", preset: e.target.value });
+  window.jarvis?.onAutonomy?.((v) => paintAutonomy(v));
+  window.jarvis?.autonomyGet?.().then(paintAutonomy).catch(() => {});
+
+  // Playbooks panel: install / pause / remove delegated operations.
+  function paintPlaybooks(list) {
+    if (!list) return;
+    $("pb-sum").textContent = list.some((p) => p.installed) ? `· ${list.filter((p) => p.installed).length} on` : "";
+    const root = $("pb-list");
+    root.innerHTML = "";
+    let team = null;
+    for (const p of list) {
+      if (p.team !== team) { team = p.team; const h = document.createElement("div"); h.className = "pb-team"; h.textContent = team; root.appendChild(h); }
+      const row = document.createElement("div"); row.className = "cn-row";
+      const head = document.createElement("div"); head.className = "cn-head";
+      const n = document.createElement("span"); n.className = "cn-name"; n.textContent = p.title;
+      const pill = document.createElement("span"); pill.className = `cn-pill ${p.installed && p.enabled ? "connected" : ""}`;
+      pill.textContent = p.installed ? (p.enabled ? "on" : "paused") : p.missing.length ? `needs ${p.missing.join(", ")}` : "off";
+      head.append(n, pill);
+      const sum = document.createElement("div"); sum.className = "cn-purpose"; sum.textContent = p.summary;
+      const btns = document.createElement("div"); btns.className = "row";
+      const mk = (label, cls, op) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (cls) b.className = cls; b.onclick = async () => { b.disabled = true; try { paintPlaybooks(await window.jarvis.playbooksOp(op, p.id)); $("pb-note").textContent = ""; } catch (e) { $("pb-note").textContent = String(e.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ""); b.disabled = false; } }; btns.appendChild(b); };
+      if (!p.installed) { if (!p.missing.length) mk("Install", "", "install"); }
+      else { mk("Run now", "ghost", "run"); mk(p.enabled ? "Pause" : "Resume", "ghost", p.enabled ? "pause" : "resume"); mk("Remove", "ghost danger", "remove"); }
+      row.append(head, sum, btns);
+      root.appendChild(row);
+    }
+  }
+  window.jarvis?.onPlaybooks?.((list) => paintPlaybooks(list));
+  window.jarvis?.playbooksList?.().then(paintPlaybooks).catch(() => {});
   $("f").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = $("q").value.trim();

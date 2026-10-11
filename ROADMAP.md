@@ -54,8 +54,15 @@ via OpenCode model list, no new keys). Local long-term memory.
   resync, read-only by default), in the brief and brain state; brain fence
   parsing made structural (inline, split, single-backtick, chained fences)
 
-Next (see docs/CHIEF-OF-STAFF.md): structured memory + commitments, meeting
-copilot, autonomy policies. Earlier list: MCP connectors managed
+- [x] Delegated operations: autonomy policy (classes, presets, hard floor for
+  deploy/spend/destructive, learned rules, daily cap, decision log), worker
+  sessions routed through it, playbooks (standup, weekly review, dependency
+  check, CI watch, investor update, customer follow-ups, revenue pulse,
+  issue triage), monthly routines, worker guardrail against injected
+  instructions
+
+Next (see docs/CHIEF-OF-STAFF.md): company brain (structured memory +
+commitments, meeting copilot) — deferred by choice. Earlier list: MCP connectors managed
 by Jarvis (calendar, email, Slack, GitHub, Linear, Stripe), structured memory +
 commitments, meeting copilot, autonomy policies.
 

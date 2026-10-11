@@ -78,8 +78,9 @@ export function toMrkdwn(md) {
 const BTN = {
   allow: ["Allow", "primary"], deny: ["Deny", "danger"], confirm: ["Confirm", "primary"], cancel: ["Cancel", "danger"],
   land: ["Land", "primary"], keep: ["Keep branch", null], discard: ["Discard", "danger"],
+  always: ["Always allow", "primary"], dismiss: ["Not now", null],
 };
-const DONE = { allow: "Allowed", deny: "Denied", confirm: "Confirmed", cancel: "Cancelled", land: "Landed", keep: "Kept", discard: "Discarded" };
+const DONE = { allow: "Allowed", deny: "Denied", confirm: "Confirmed", cancel: "Cancelled", land: "Landed", keep: "Kept", discard: "Discarded", always: "Rule added", dismiss: "Dismissed" };
 
 export function inboxBlocks(item) {
   const head = `*${item.title}*${item.detail ? `\n\`${String(item.detail).replace(/`/g, "'")}\`` : ""}`;

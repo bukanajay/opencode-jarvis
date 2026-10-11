@@ -8,6 +8,8 @@ import { matchConfigCommand, isWidening, pendingConfigs } from "./config.js";
 import { refreshForms, pendingForms } from "./forms.js";
 import { chains, publicChain } from "./worktrees.js";
 import { projectDir } from "./project.js";
+import { WORKER_GUARDRAIL } from "./playbooks.js";
+import { WORKER_SESSION_RULES } from "./policy.js";
 
 export const workers = new Map(); // sessionID -> worker record
 export const pendingPermissions = new Map(); // requestID -> { sessionID, request }
@@ -383,6 +385,8 @@ export async function spawnWorker(task, opts = {}) {
     model,
     location: { directory },
     title: task.slice(0, 64),
+    // Route every non-read request through Jarvis's autonomy policy.
+    permissions: WORKER_SESSION_RULES,
     // Chain bookkeeping rides on the session so a restart can rebuild it.
     metadata: { jarvis: { task: task.slice(0, 2000), chain: opts.chain ?? null, round, project } },
   });
@@ -396,7 +400,8 @@ export async function spawnWorker(task, opts = {}) {
   w.round = round;
   w.promptedAt = Date.now();
   await ensureFleetPump(opts.onEvent);
-  await client.session.prompt({ sessionID: session.id, text: task });
+  // Every worker gets the untrusted-content guardrail with its task.
+  await client.session.prompt({ sessionID: session.id, text: `${task}\n\n${WORKER_GUARDRAIL}` });
   return { sessionID: session.id, model };
 }
 
@@ -456,7 +461,7 @@ export async function deleteWorker(sessionID) {
   return { ok: true };
 }
 
-export async function replyPermission(requestID, decision) {
+export async function replyPermission(requestID, decision, message) {
   // decision: "allow" | "deny" -> "once" | "reject". Never "always" without Step-5 confirm.
   const { client } = await ensureClient();
   const pending = pendingPermissions.get(requestID);
@@ -465,6 +470,7 @@ export async function replyPermission(requestID, decision) {
     sessionID: pending.sessionID,
     requestID,
     decision: decision === "allow" ? "once" : "reject",
+    ...(message ? { message } : {}),
   });
   return out;
 }

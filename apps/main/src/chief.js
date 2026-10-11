@@ -100,7 +100,7 @@ export function createChief(deps) {
   function routineOp(a) {
     const s = store();
     if (a.op === "add") {
-      const r = addRoutine(s, { title: a.title, kind: a.kind, prompt: a.prompt, time: a.time, days: a.days, everyMinutes: a.every }, now());
+      const r = addRoutine(s, { title: a.title, kind: a.kind, prompt: a.prompt, time: a.time, days: a.days, everyMinutes: a.every, monthDay: a.monthDay, playbook: a.playbook }, now());
       return { ok: true, routine: r, line: `routine "${r.title}" added` };
     }
     const all = /^(all|everything|every routine)$/i.test(a.title);

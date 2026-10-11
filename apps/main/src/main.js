@@ -8,6 +8,8 @@ import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
 import { createChief } from "./chief.js";
+import { decide, classify, learn, loadPolicy, savePolicy, countAuto, makeRule, isTightening, autonomySummary, logDecision, recentDecisions, CLASSES, PRESETS, NEVER_AUTO, effectiveMode } from "./policy.js";
+import { PLAYBOOKS, playbookRoutine, playbookView, playbooksSummary, byPlaybook } from "./playbooks.js";
 import { createPresence, wireWindow, startHidden } from "./presence.js";
 import { isBriefRequest } from "./brief.js";
 import { inboxSummary } from "./inbox.js";
@@ -62,8 +64,108 @@ function broadcastConfig(r) {
 
 async function answerPending(decision) {
   const [requestID] = [...pendingPermissions.keys()];
-  const r = await replyPermission(requestID, decision);
+  const r = await userPermission(requestID, decision);
   return { requestID, decision, r };
+}
+
+// Autonomy (policy.js). Worker permission requests are decided here first:
+// auto-allowed, blocked, or left for the user (card, inbox, voice, Slack).
+// Every user answer teaches the policy; three identical approvals offer a rule.
+async function userPermission(requestID, decision) {
+  const req = pendingPermissions.get(requestID);
+  if (req) {
+    const store = loadPolicy();
+    const c = classify(req);
+    const sug = learn(store, c, decision);
+    if (sug && !store.suggestions.some((x) => x.signature === sug.signature)) store.suggestions.push({ ...sug, at: Date.now() });
+    savePolicy(store);
+    logDecision({ by: "you", decision, class: c.class, action: c.action, what: c.what.slice(0, 200), sessionID: req.sessionID });
+  }
+  const r = await replyPermission(requestID, decision);
+  chief?.refreshInbox();
+  return r;
+}
+
+// Returns true when policy answered the request (no card, no voice, no inbox).
+async function autonomyFirst(request) {
+  const store = loadPolicy();
+  const w = workers.get(request.sessionID);
+  const isolated = !!(w && chains.get(w.chain)?.directory && shellStore().settings.isolation !== "shared");
+  const d = decide(request, store, { isolated });
+  request.policy = { class: d.class, reason: d.reason };
+  if (d.decision === "ask") return false;
+  const who = w?.agent ?? "worker";
+  try {
+    if (d.decision === "allow") {
+      await replyPermission(request.requestID, "allow");
+      countAuto(store);
+      if (d.rule) { const r = store.rules.find((x) => x.id === d.rule); if (r) r.uses = (r.uses ?? 0) + 1; }
+      savePolicy(store);
+      logDecision({ by: "jarvis", decision: "allow", class: d.class, action: d.action, what: d.what.slice(0, 200), reason: d.reason, sessionID: request.sessionID });
+      win?.webContents.send("session.stream", { delta: `\n[auto] ${who}: ${d.class} ${d.what ? `\`${d.what.slice(0, 80)}\`` : d.action} — ${d.reason}\n` });
+    } else {
+      await replyPermission(request.requestID, "deny", `Blocked by the user's autonomy policy (${d.reason}). Do not retry this; find another way or report back.`);
+      logDecision({ by: "jarvis", decision: "deny", class: d.class, action: d.action, what: d.what.slice(0, 200), reason: d.reason, sessionID: request.sessionID });
+      win?.webContents.send("session.stream", { delta: `\n[policy] blocked ${who}: ${d.class} ${d.what ? `\`${d.what.slice(0, 80)}\`` : d.action} — ${d.reason}\n` });
+      deliver(() => slack?.post(`Blocked by policy: ${who} wanted ${d.class} \`${d.what.slice(0, 120)}\` (${d.reason}).`));
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[autonomy] ${err.message ?? err}; leaving it to the user`);
+    return false;
+  }
+}
+
+function autonomyView() {
+  const store = loadPolicy();
+  return {
+    enabled: store.enabled,
+    preset: store.preset,
+    presets: Object.keys(PRESETS),
+    classes: Object.entries(CLASSES).map(([id, label]) => ({ id, label, mode: effectiveMode(store, id), locked: NEVER_AUTO.has(id) })),
+    rules: store.rules,
+    today: store.daily?.date === new Date().toISOString().slice(0, 10) ? store.daily.n : 0,
+    dailyCap: store.dailyCap,
+    recent: recentDecisions(12),
+  };
+}
+
+// by: "user" (Settings: anything) or "jarvis" (brain action: only tightening).
+function changeAutonomy(change, by = "user") {
+  const store = loadPolicy();
+  if (by === "jarvis" && !isTightening(store, change)) {
+    return { ok: false, reason: "I can only make autonomy more careful myself; loosen it in Settings → Autonomy" };
+  }
+  if (change.op === "pause") store.enabled = false;
+  else if (change.op === "resume") store.enabled = true;
+  else if (change.op === "preset") { store.preset = change.preset; store.classes = {}; }
+  else if (change.op === "class") {
+    if (NEVER_AUTO.has(change.class) && change.mode === "auto") return { ok: false, reason: `${change.class} always needs you` };
+    store.classes[change.class] = change.mode;
+  } else if (change.op === "removeRule") store.rules = store.rules.filter((r) => r.id !== change.id);
+  else return { ok: false, reason: "unknown change" };
+  savePolicy(store);
+  logDecision({ by, decision: "policy", change });
+  return { ok: true, view: autonomyView() };
+}
+
+function playbooksNow() {
+  const connected = (connectorsCache?.rows ?? []).filter((r) => r.enabled && r.status === "connected").map((r) => r.id);
+  return playbookView(loadRoutines().routines, connected);
+}
+
+function playbookOp(op, id) {
+  const p = byPlaybook(id);
+  if (!p) return { ok: false, reason: `no playbook ${id}` };
+  const view = playbooksNow().find((x) => x.id === id);
+  if (op === "install") {
+    if (view.installed) return { ok: true, line: `${p.title} is already installed` };
+    if (view.missing.length) return { ok: false, reason: `${p.title} needs ${view.missing.join(", ")} connected first` };
+    const r = chief.routineOp({ action: "routine", op: "add", ...playbookRoutine(id), every: playbookRoutine(id).everyMinutes });
+    return r.ok ? { ok: true, line: `installed ${p.title} (${p.summary})` } : r;
+  }
+  if (!view.installed) return { ok: false, reason: `${p.title} is not installed` };
+  return chief.routineOp({ action: "routine", op, title: view.routineId });
 }
 
 // Spoken replies (voice mode only). Main renders the line in Jarvis's one
@@ -252,7 +354,7 @@ function jarvisContext() {
       settings: shellStore().settings,
       projects: recentProjects(),
       pendingPermissions: pendingPermissions.size,
-    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}${connectorsCache ? `\n${connectorsSummary(connectorsCache)}` : ""}`;
+    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}${connectorsCache ? `\n${connectorsSummary(connectorsCache)}` : ""}\n${autonomySummary(loadPolicy())}\n${playbooksSummary(playbooksNow())}`;
   } catch (err) {
     return `(deck state unavailable: ${String(err.message ?? err).slice(0, 80)})`;
   }
@@ -370,6 +472,21 @@ async function runJarvisAction(a, broadcast) {
         speak(win, r.line, { force: true });
         return r;
       }
+      case "autonomy": {
+        const r = changeAutonomy(a, "jarvis");
+        if (!r.ok) return fail(r.reason);
+        win?.webContents.send("autonomy.changed", r.view);
+        note(`autonomy: ${a.op}${a.preset ? ` ${a.preset}` : ""}${a.class ? ` ${a.class} → ${a.mode}` : ""}`);
+        return r;
+      }
+      case "playbook": {
+        if (!chief) return fail("not ready yet");
+        const r = playbookOp(a.op, a.id);
+        if (!r.ok) return fail(r.reason);
+        win?.webContents.send("playbooks.changed", playbooksNow());
+        note(r.line ?? `${a.op} ${a.id}`);
+        return r;
+      }
       case "connector": {
         if (a.op === "open") {
           win?.show();
@@ -405,6 +522,7 @@ async function runJarvisAction(a, broadcast) {
 function inboxSources() {
   return {
     permissions: [...pendingPermissions.values()],
+    suggestions: loadPolicy().suggestions,
     configs: [...pendingConfigs.values()],
     forms: [...pendingForms.values()],
     bootstraps: [...bootStash.entries()].map(([id, e]) => ({
@@ -424,7 +542,15 @@ async function answerInbox(id, action, broadcast) {
   if (!item.actions.includes(action)) return { ok: false, reason: `${item.kind} cannot ${action}` };
   let r = { ok: true };
   if (item.kind === "permission") {
-    await replyPermission(item.ref, action === "allow" ? "allow" : "deny");
+    await userPermission(item.ref, action === "allow" ? "allow" : "deny");
+  } else if (item.kind === "rule") {
+    const store = loadPolicy();
+    const sug = store.suggestions.find((x) => x.signature === item.ref);
+    store.suggestions = store.suggestions.filter((x) => x.signature !== item.ref);
+    if (action === "always" && sug) store.rules.push(makeRule({ action: sug.action, signature: sug.signature, class: sug.class }, "allow"));
+    else store.dismissed = [...new Set([...(store.dismissed ?? []), item.ref])];
+    savePolicy(store);
+    logDecision({ by: "you", decision: action === "always" ? "rule" : "dismiss-rule", signature: item.ref });
   } else if (item.kind === "config") {
     r = await confirmWidening((await ensureClient()).client, projectDir(), item.ref, action === "confirm", widenHooks());
     broadcastConfig(r);
@@ -481,7 +607,13 @@ function startChief(broadcast, commitText) {
     },
     hush: () => hush(win),
     lastBriefAt,
-    briefExtra: () => (connectorsCache ? briefConnectorLine(connectorsCache) : ""),
+    briefExtra: () => {
+      const since = Date.now() - 24 * 3600 * 1000;
+      const auto = recentDecisions(500).filter((d) => d.at >= since && d.by === "jarvis");
+      const blocked = auto.filter((d) => d.decision === "deny");
+      const line = auto.length ? `Autonomy in the last 24h: ${auto.length - blocked.length} request(s) auto-approved, ${blocked.length} blocked${blocked.length ? ` (${blocked.slice(0, 3).map((d) => `${d.class} ${String(d.what ?? "").slice(0, 40)}`).join("; ")})` : ""}.` : "";
+      return [connectorsCache ? briefConnectorLine(connectorsCache) : "", line].filter(Boolean).join("\n");
+    },
   });
   chief.start();
   startConnectors(broadcast);
@@ -489,6 +621,18 @@ function startChief(broadcast, commitText) {
   ipcMain.handle("inbox.list", async () => ({ ok: true, items: chief.refreshInbox() }));
   ipcMain.handle("inbox.act", async (_e, { id, action } = {}) => answerInbox(id, action, broadcast));
   ipcMain.handle("brief.now", async () => chief.brief({ spoken: true }));
+  ipcMain.handle("autonomy.get", async () => autonomyView());
+  ipcMain.handle("autonomy.change", async (_e, change = {}) => {
+    const r = changeAutonomy(change, "user");
+    if (!r.ok) throw new Error(r.reason);
+    return r.view;
+  });
+  ipcMain.handle("playbooks.list", async () => playbooksNow());
+  ipcMain.handle("playbooks.op", async (_e, { op, id } = {}) => {
+    const r = playbookOp(op, id);
+    if (!r.ok) throw new Error(r.reason);
+    return playbooksNow();
+  });
 }
 
 // Connectors (connectors.js): Jarvis keeps the list and the keychain tokens,
@@ -886,8 +1030,12 @@ app.whenReady().then(async () => {
   const broadcast = (msg) => win?.webContents.send(msg.kind, msg);
   await ensureFleetPump((ev) => {
     if (ev.kind === "permission.waiting") {
-      broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
-      askPermissionAloud(ev.request);
+      autonomyFirst(ev.request).then((handled) => {
+        if (handled) return;
+        broadcast({ kind: "permission.waiting", request: ev.request, snapshot: ev.snapshot });
+        askPermissionAloud(ev.request);
+        chief?.refreshInbox();
+      });
     } else if (ev.kind === "permission.resolved") {
       broadcast({ kind: "permission.resolved", ...ev });
       permissionSettled();
@@ -1208,7 +1356,7 @@ app.whenReady().then(async () => {
     if (!requestID || (decision !== "allow" && decision !== "deny")) {
       throw new Error("permission.respond: requestID + allow|deny required");
     }
-    await replyPermission(requestID, decision);
+    await userPermission(requestID, decision);
     return { ok: true, requestID, decision };
   });
   ipcMain.handle("app.command", async (_e, { name, args } = {}) => {

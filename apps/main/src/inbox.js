@@ -10,10 +10,21 @@ const clip = (s, n = 140) => {
 };
 
 // Most urgent first: a blocked worker beats a branch that can wait.
-const RANK = { permission: 0, config: 1, form: 2, agent: 3, branch: 4 };
+const RANK = { permission: 0, config: 1, form: 2, agent: 3, branch: 4, rule: 5 };
 
-export function buildInbox({ permissions = [], configs = [], bootstraps = [], forms = [], chains = [], workers = new Map() } = {}) {
+export function buildInbox({ permissions = [], configs = [], bootstraps = [], forms = [], chains = [], workers = new Map(), suggestions = [] } = {}) {
   const items = [];
+  for (const s of suggestions) {
+    items.push({
+      id: `rule:${s.signature}`,
+      kind: "rule",
+      title: `Always allow ${s.label}?`,
+      detail: `You approved it ${s.count} times. Workers would no longer ask for it.`,
+      ref: s.signature,
+      at: s.at ?? 0,
+      actions: ["always", "dismiss"],
+    });
+  }
   for (const p of permissions) {
     const w = workers.get(p.sessionID);
     items.push({
@@ -100,4 +111,5 @@ export const ACTIONS_BY_KIND = Object.freeze({
   form: ["open"],
   agent: ["open", "cancel"],
   branch: ["land", "keep", "discard"],
+  rule: ["always", "dismiss"],
 });

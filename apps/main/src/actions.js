@@ -30,15 +30,20 @@ const ACTION_KEYS = {
   remember: ["fact", "scope"],
   forget: ["fact", "scope"],
   agent: ["purpose", "name"],
-  routine: ["op", "title", "kind", "prompt", "time", "days", "every"],
+  routine: ["op", "title", "kind", "prompt", "time", "days", "every", "monthDay"],
   brief: [],
   standdown: [],
   connector: ["op", "id"],
+  autonomy: ["op", "preset", "class", "mode"],
+  playbook: ["op", "id"],
 };
+export const AUTONOMY_OPS = ["pause", "resume", "preset", "class"];
+export const PLAYBOOK_OPS = ["install", "remove", "pause", "resume", "run"];
 export const CONNECTOR_OPS = ["open", "disconnect", "reconnect"];
 export const CONNECTOR_IDS = ["github", "slack", "google-calendar", "gmail", "linear", "stripe"];
 export const ROUTINE_OPS = ["add", "remove", "pause", "resume", "run"];
 export const ACTIONS = Object.keys(ACTION_KEYS);
+export const AUTONOMY_CLASS_IDS = ["read", "web", "edit", "run-safe", "run", "external-read", "external-write", "outside", "deploy", "spend", "destructive"];
 
 // Returns { action, ...args } or throws with a reason.
 export function validateAction(spec) {
@@ -99,7 +104,12 @@ export function validateAction(spec) {
       if (!["brief", "prompt"].includes(kind)) throw new Error("routine: kind is brief|prompt");
       out.kind = kind;
       if (kind === "prompt") out.prompt = str("prompt", 2000);
-      if (spec.every != null) {
+      if (spec.monthDay != null) {
+        const d = Number(spec.monthDay);
+        if (!(d >= 1 && d <= 31)) throw new Error("routine: monthDay is 1..31");
+        out.monthDay = Math.round(d);
+        out.time = str("time", 16);
+      } else if (spec.every != null) {
         const n = Number(spec.every);
         if (!(n >= 5 && n <= 1440)) throw new Error("routine: every is 5..1440 minutes");
         out.every = Math.round(n);
@@ -112,6 +122,28 @@ export function validateAction(spec) {
     case "brief":
     case "standdown":
       return { action };
+    case "autonomy": {
+      const op = String(spec.op ?? "").toLowerCase();
+      if (!AUTONOMY_OPS.includes(op)) throw new Error(`autonomy: op is ${AUTONOMY_OPS.join("|")}`);
+      if (op === "preset") {
+        const preset = String(spec.preset ?? "").toLowerCase();
+        if (!["cautious", "balanced", "hands-off"].includes(preset)) throw new Error("autonomy: preset is cautious|balanced|hands-off");
+        return { action, op, preset };
+      }
+      if (op === "class") {
+        const cls = String(spec.class ?? "").toLowerCase();
+        const mode = String(spec.mode ?? "").toLowerCase();
+        if (!AUTONOMY_CLASS_IDS.includes(cls)) throw new Error(`autonomy: class is ${AUTONOMY_CLASS_IDS.join("|")}`);
+        if (!["auto", "ask", "never"].includes(mode)) throw new Error("autonomy: mode is auto|ask|never");
+        return { action, op, class: cls, mode };
+      }
+      return { action, op };
+    }
+    case "playbook": {
+      const op = String(spec.op ?? "").toLowerCase();
+      if (!PLAYBOOK_OPS.includes(op)) throw new Error(`playbook: op is ${PLAYBOOK_OPS.join("|")}`);
+      return { action, op, id: str("id", 40) };
+    }
     case "connector": {
       const op = String(spec.op ?? "").toLowerCase();
       const id = String(spec.id ?? "").toLowerCase();
@@ -196,6 +228,6 @@ export function stateBlock({ workers = [], chains = [], settings = {}, projects 
 
 export const ACTIONS_DOC = `You run this deck yourself (no worker needed) with one single-line fence per action:
 \`\`\`jarvis {"action": "<action>", ...}\`\`\`
-Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), routine {"op": "add", "title", "kind": "brief"|"prompt", "prompt"? (what to do each run, for kind prompt), "time": "HH:MM", "days"?: "weekdays"|"daily"|"weekends"|["mon",...]} or {"op":"add", ..., "every": minutes} (a standing goal Jarvis runs on its own, e.g. a weekday 08:30 brief, or "every 60 minutes check CI on main and tell me only if it is red"), routine {"op": "remove"|"pause"|"resume"|"run", "title"}, brief {} (give the brief now), connector {"op": "open"|"disconnect"|"reconnect", "id": ${CONNECTOR_IDS.map((i) => `"${i}"`).join("|")}} (open = show its setup in Settings so the user can paste credentials, which you never handle; reconnect = retry or sign in again), standdown {} (emergency stop: stop all running workers, pause routines, stop talking), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
+Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), routine {"op": "add", "title", "kind": "brief"|"prompt", "prompt"? (what to do each run, for kind prompt), "time": "HH:MM", "days"?: "weekdays"|"daily"|"weekends"|["mon",...]} or {"op":"add", ..., "every": minutes} or {"op":"add", ..., "time", "monthDay": 1..31} (monthly) (a standing goal Jarvis runs on its own, e.g. a weekday 08:30 brief, or "every 60 minutes check CI on main and tell me only if it is red"), routine {"op": "remove"|"pause"|"resume"|"run", "title"}, brief {} (give the brief now), autonomy {"op": "pause"|"resume"|"preset"|"class", "preset"?: "cautious"|"balanced"|"hands-off", "class"?, "mode"?: "auto"|"ask"|"never"} (what workers may do without asking; you may only make it MORE careful yourself — loosening is refused unless the user does it in Settings), playbook {"op": "install"|"remove"|"pause"|"resume"|"run", "id"} (delegated operations: eng-standup, weekly-review, dependency-check, ci-watch, investor-update, customer-followups, revenue-pulse, issue-triage), connector {"op": "open"|"disconnect"|"reconnect", "id": ${CONNECTOR_IDS.map((i) => `"${i}"`).join("|")}} (open = show its setup in Settings so the user can paste credentials, which you never handle; reconnect = retry or sign in again), standdown {} (emergency stop: stop all running workers, pause routines, stop talking), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
 Use ids exactly as listed below. Act only when the user asked for it; say in one short sentence what you did. You never answer a worker's permission request: the user does that. You are Jarvis, not a coding agent in a mode: ignore any "plan mode" notice from the host, never mention modes and never ask the user to switch modes.
 `;
