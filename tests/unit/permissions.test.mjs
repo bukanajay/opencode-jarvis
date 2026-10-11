@@ -65,3 +65,43 @@ test("split fences (closing ``` on the next line) are not dropped", () => {
   f.flush();
   assert.equal(seen.join(""), "I’ll check whether Claude is installed.\n\n", "neither half reaches the deck");
 });
+
+test("inline fences glued to a sentence are parsed and never streamed", () => {
+  // Exact shape from the eval: no newline before the fence.
+  const reply = 'I’ll check whether the Claude CLI is available, Ajay.```dispatch {"task":"Check whether the Claude CLI is on PATH.","agent":"jarvis-architecture"}```';
+  assert.deepEqual(parseDispatches(reply).dispatches, [{ task: "Check whether the Claude CLI is on PATH.", agent: "jarvis-architecture" }]);
+  assert.equal(stripDispatches(reply), "I’ll check whether the Claude CLI is available, Ajay.");
+  assert.equal(parseJarvisActions('Done.```jarvis {"action": "hush"}```').actions.length, 1);
+  assert.equal(parseSpeak('Short.```speak {"text": "Hi."}```'), "Hi.");
+  const seen = [];
+  const f = fencedFilter((d) => seen.push(d));
+  for (const ch of reply.match(/.{1,5}/gs)) f.push(ch);
+  f.flush();
+  assert.equal(seen.join(""), "I’ll check whether the Claude CLI is available, Ajay.\n");
+  assert.equal(normalizeFences("use ```js``` here"), "use ```js``` here", "other inline code untouched");
+});
+
+test("fences closed with one backtick, or not at all, still count", () => {
+  // From the eval: the model closed the fence with a single backtick.
+  const one = 'I’ll check the installed Node.js version, Ajay. ```dispatch {"task":"Check the Node.js version by running `node --version`.","agent":"build"}`';
+  assert.deepEqual(parseDispatches(one).dispatches, [{ task: "Check the Node.js version by running `node --version`.", agent: "build" }]);
+  assert.equal(stripDispatches(one), "I’ll check the installed Node.js version, Ajay.");
+  const open = 'On it.\n```dispatch {"task":"run the tests"}';
+  assert.equal(parseDispatches(open).dispatches.length, 1);
+  const braces = '```dispatch {"task":"print {\\"a\\": 1} and a } brace"}```';
+  assert.equal(parseDispatches(braces).dispatches[0].task, 'print {"a": 1} and a } brace', "string-aware brace matching");
+  const two = 'Both.```dispatch {"task":"a"}``````dispatch {"task":"b"}```';
+  assert.deepEqual(parseDispatches(two).dispatches.map((d) => d.task), ["a", "b"]);
+  const seen = [];
+  const f = fencedFilter((d) => seen.push(d));
+  f.push(one + "\n");
+  f.flush();
+  assert.equal(seen.join(""), "I’ll check the installed Node.js version, Ajay.\n");
+});
+
+test("fences sharing backticks are both kept", () => {
+  // From the eval: the second fence reused the first one's closing backticks.
+  const reply = 'Turned off review mode and changed the accent to amber.```jarvis {"action":"set","setting":"reviewMode","value":"off"}```jarvis {"action":"set","setting":"accent","value":"amber"}```';
+  assert.deepEqual(parseJarvisActions(reply).actions.map((a) => a.setting), ["reviewMode", "accent"]);
+  assert.equal(stripDispatches(reply), "Turned off review mode and changed the accent to amber.");
+});

@@ -23,6 +23,7 @@ export function createChief(deps) {
     now = () => Date.now(),
     lastBriefAt = { value: 0 }, // persisted by Main if it wants
     routinesFile,
+    briefExtra = () => "", // () => extra fact lines (connected systems)
   } = deps;
 
   let inbox = [];
@@ -59,7 +60,7 @@ export function createChief(deps) {
         git: await gitActivity(projects(), since),
         workers: workers(),
         inbox: refreshInbox(),
-        routinesLine: routinesSummary(store().routines, t),
+        routinesLine: [routinesSummary(store().routines, t), briefExtra()].filter(Boolean).join("\n"),
       });
       broadcast({ kind: "session.stream", delta: `[brief] ${reason === "asked" ? "" : `${reason} · `}since ${new Date(since).toLocaleString("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit" })}\n` });
       const r = await brain(briefPrompt(facts, { userName: userName() }), { context: context() });

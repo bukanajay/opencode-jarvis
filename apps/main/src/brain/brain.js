@@ -14,7 +14,7 @@ import { speechFor } from "../speech.js";
 import { buildReviewPrompt, MAX_ROUNDS } from "./report.js";
 import { loadStore } from "../shell.js";
 import { parseJarvisActions, ACTIONS_DOC } from "../actions.js";
-import { normalizeFences, OPEN_FENCE_LINE, CLOSE_FENCE_LINE } from "../fences.js";
+import { normalizeFences, splitInlineFence, OPEN_FENCE_LINE, CLOSED_FENCE_LINE, CLOSE_FENCE_LINE } from "../fences.js";
 
 const brainSessions = new Map(); // directory -> sessionID
 let brainModelUsed = null;
@@ -145,19 +145,29 @@ export function fencedFilter(forward) {
       openFence = false;
       if (CLOSE_FENCE_LINE.test(ln)) return false;
     }
-    if (DISPATCH_LINE.test(ln)) return false;
+    if (DISPATCH_LINE.test(ln) || CLOSED_FENCE_LINE.test(ln)) return false;
     if (OPEN_FENCE_LINE.test(ln)) { openFence = true; return false; }
     return true;
+  };
+  // "On it.```dispatch {...}```" -> forward "On it.", hold the fence.
+  const emit = (ln, nl) => {
+    const [text, fence] = splitInlineFence(ln);
+    if (fence) {
+      forward(text + "\n");
+      if (keep(fence) && nl) forward(fence + "\n");
+      return;
+    }
+    if (keep(ln)) forward(ln + (nl ? "\n" : ""));
   };
   return {
     push(chunk) {
       buf += String(chunk ?? "");
       const lines = buf.split("\n");
       buf = lines.pop();
-      for (const ln of lines) if (keep(ln)) forward(ln + "\n");
+      for (const ln of lines) emit(ln, true);
     },
     flush() {
-      if (buf && keep(buf)) forward(buf);
+      if (buf) emit(buf, false);
       buf = "";
       openFence = false;
     },

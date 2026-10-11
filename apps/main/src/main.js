@@ -13,6 +13,7 @@ import { isBriefRequest } from "./brief.js";
 import { inboxSummary } from "./inbox.js";
 import { loadRoutines, routinesSummary } from "./routines.js";
 import { createSecrets } from "./secrets.js";
+import { planConnector, splitValues, loadConnectors, saveConnectors, connectorView, connectorsSummary, briefConnectorLine, serverName, byId as connectorById } from "./connectors.js";
 import { createSlackBridge, loadSlackState, saveSlackState, controlSummary, SLACK_MANIFEST, DELIVER_MODES } from "./slack.js";
 import { brainRespond, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
 import { collectWorkerReport, reportHeadline } from "./brain/report.js";
@@ -251,7 +252,7 @@ function jarvisContext() {
       settings: shellStore().settings,
       projects: recentProjects(),
       pendingPermissions: pendingPermissions.size,
-    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}`;
+    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}${connectorsCache ? `\n${connectorsSummary(connectorsCache)}` : ""}`;
   } catch (err) {
     return `(deck state unavailable: ${String(err.message ?? err).slice(0, 80)})`;
   }
@@ -369,6 +370,18 @@ async function runJarvisAction(a, broadcast) {
         speak(win, r.line, { force: true });
         return r;
       }
+      case "connector": {
+        if (a.op === "open") {
+          win?.show();
+          win?.webContents.send("connectors.open", { id: a.id });
+          note(`opened ${connectorById(a.id)?.name ?? a.id} setup in Settings`);
+          return { ok: true };
+        }
+        const r = a.op === "disconnect" ? await disableConnector(a.id) : await reconnectConnector(a.id);
+        if (!r.ok) return fail(r.reason);
+        note(`${a.op === "disconnect" ? "disconnected" : "reconnecting"} ${connectorById(a.id)?.name ?? a.id}`);
+        return r;
+      }
       case "agent": {
         const directory = projectDir();
         const ctx = await buildBootstrapCtx(directory);
@@ -468,12 +481,111 @@ function startChief(broadcast, commitText) {
     },
     hush: () => hush(win),
     lastBriefAt,
+    briefExtra: () => (connectorsCache ? briefConnectorLine(connectorsCache) : ""),
   });
   chief.start();
+  startConnectors(broadcast);
   startSlack(broadcast);
   ipcMain.handle("inbox.list", async () => ({ ok: true, items: chief.refreshInbox() }));
   ipcMain.handle("inbox.act", async (_e, { id, action } = {}) => answerInbox(id, action, broadcast));
   ipcMain.handle("brief.now", async () => chief.brief({ spoken: true }));
+}
+
+// Connectors (connectors.js): Jarvis keeps the list and the keychain tokens,
+// adds enabled ones to the OpenCode server at runtime and re-adds them when
+// that server restarts. opencode.json is never edited.
+let connectorsCache = null;
+const connectorSecret = (id, key) => `connector.${id}.${key}`;
+
+async function refreshConnectors(broadcast) {
+  try {
+    const { client } = await ensureClient();
+    const servers = (await client.mcp.list()).data ?? [];
+    connectorsCache = connectorView(loadConnectors(), servers);
+  } catch (err) {
+    connectorsCache = connectorView(loadConnectors(), []);
+  }
+  broadcast?.({ kind: "connectors.changed", view: connectorsCache });
+  return connectorsCache;
+}
+
+async function addToServer(id) {
+  const saved = loadConnectors()[id];
+  if (!saved) return { ok: false, reason: "not set up" };
+  const values = { ...(saved.values ?? {}) };
+  for (const f of connectorById(id).fields) if (f.secret) { const v = secrets.get(connectorSecret(id, f.key)); if (v) values[f.key] = v; }
+  const plan = planConnector(id, values, { readOnly: saved.readOnly });
+  const { client } = await ensureClient();
+  await client.mcp.remove({ server: plan.server }).catch(() => {});
+  await client.mcp.add({ server: plan.server, config: plan.config });
+  await client.mcp.connect({ server: plan.server }).catch(() => {});
+  return { ok: true };
+}
+
+async function enableConnector(id, values, readOnly, broadcast) {
+  const plan = planConnector(id, values, { readOnly }); // validates before anything is saved
+  const { secret, plain } = splitValues(id, plan.values);
+  for (const [k, v] of Object.entries(secret)) secrets.set(connectorSecret(id, k), v);
+  const all = loadConnectors();
+  all[id] = { enabled: true, readOnly: plan.readOnly, values: plain, at: Date.now() };
+  saveConnectors(all);
+  await addToServer(id);
+  return refreshConnectors(broadcast);
+}
+
+async function disableConnector(id, broadcast) {
+  const all = loadConnectors();
+  if (!all[id]) return { ok: false, reason: "not set up" };
+  all[id].enabled = false;
+  saveConnectors(all);
+  const { client } = await ensureClient();
+  await client.mcp.remove({ server: serverName(id) }).catch(() => {});
+  await refreshConnectors(broadcast);
+  return { ok: true };
+}
+
+async function reconnectConnector(id, broadcast) {
+  const all = loadConnectors();
+  if (!all[id]) return { ok: false, reason: "not set up yet; open its setup first" };
+  if (!all[id].enabled) { all[id].enabled = true; saveConnectors(all); }
+  await addToServer(id);
+  await refreshConnectors(broadcast);
+  return { ok: true };
+}
+
+async function forgetConnector(id, broadcast) {
+  await disableConnector(id).catch(() => {});
+  for (const f of connectorById(id)?.fields ?? []) if (f.secret) secrets.remove(connectorSecret(id, f.key));
+  const all = loadConnectors();
+  delete all[id];
+  saveConnectors(all);
+  return refreshConnectors(broadcast);
+}
+
+// Re-add enabled connectors the server lost (OpenCode restarted).
+async function syncConnectors(broadcast) {
+  try {
+    const { client } = await ensureClient();
+    const listed = new Set(((await client.mcp.list()).data ?? []).map((x) => x.name));
+    for (const [id, saved] of Object.entries(loadConnectors())) {
+      if (saved?.enabled && connectorById(id) && !listed.has(serverName(id))) {
+        await addToServer(id).catch((err) => console.warn(`[connectors] ${id}: ${err.message ?? err}`));
+      }
+    }
+  } catch (err) {
+    console.warn(`[connectors] sync: ${err.message ?? err}`);
+  }
+  return refreshConnectors(broadcast);
+}
+
+function startConnectors(broadcast) {
+  syncConnectors(broadcast).catch(() => {});
+  setInterval(() => syncConnectors(broadcast).catch(() => {}), 60000);
+  ipcMain.handle("connectors.list", async () => refreshConnectors());
+  ipcMain.handle("connectors.enable", async (_e, { id, values, readOnly } = {}) => enableConnector(id, values ?? {}, readOnly, broadcast));
+  ipcMain.handle("connectors.disable", async (_e, { id } = {}) => { const r = await disableConnector(id, broadcast); if (!r.ok) throw new Error(r.reason); return connectorsCache; });
+  ipcMain.handle("connectors.reconnect", async (_e, { id } = {}) => { const r = await reconnectConnector(id, broadcast); if (!r.ok) throw new Error(r.reason); return connectorsCache; });
+  ipcMain.handle("connectors.forget", async (_e, { id } = {}) => forgetConnector(id, broadcast));
 }
 
 // Slack bridge (slack.js): tokens in the keychain-backed secrets store,

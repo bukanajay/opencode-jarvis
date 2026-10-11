@@ -32,9 +32,9 @@ test("parseDispatches: rejects extra keys, bad agent ids, empty and oversized ta
   assert.equal(warnings.length, 4);
 });
 
-test("parseDispatches: fences must be on their own line", () => {
+test("parseDispatches: a fence glued to a sentence still counts (models do this)", () => {
   const { dispatches } = parseDispatches(`text ${fence({ task: "inline" })}`);
-  assert.equal(dispatches.length, 0);
+  assert.deepEqual(dispatches, [{ task: "inline", agent: null }]);
 });
 
 test("parseDispatches: tolerates null and empty input", () => {

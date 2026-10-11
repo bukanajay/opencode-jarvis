@@ -49,7 +49,13 @@ via OpenCode model list, no new keys). Local long-term memory.
 - [x] Slack bridge (Socket Mode): owner-paired DMs through the same brain,
   decision buttons, briefs and worker results when away; tokens in the keychain
 
-Next (see docs/CHIEF-OF-STAFF.md): MCP connectors managed
+- [x] Connectors framework: GitHub, Slack search, Google Calendar, Gmail,
+  Linear, Stripe as Jarvis-managed MCP servers (keychain tokens, runtime add +
+  resync, read-only by default), in the brief and brain state; brain fence
+  parsing made structural (inline, split, single-backtick, chained fences)
+
+Next (see docs/CHIEF-OF-STAFF.md): structured memory + commitments, meeting
+copilot, autonomy policies. Earlier list: MCP connectors managed
 by Jarvis (calendar, email, Slack, GitHub, Linear, Stripe), structured memory +
 commitments, meeting copilot, autonomy policies.
 

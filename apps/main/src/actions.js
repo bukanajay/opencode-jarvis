@@ -33,7 +33,10 @@ const ACTION_KEYS = {
   routine: ["op", "title", "kind", "prompt", "time", "days", "every"],
   brief: [],
   standdown: [],
+  connector: ["op", "id"],
 };
+export const CONNECTOR_OPS = ["open", "disconnect", "reconnect"];
+export const CONNECTOR_IDS = ["github", "slack", "google-calendar", "gmail", "linear", "stripe"];
 export const ROUTINE_OPS = ["add", "remove", "pause", "resume", "run"];
 export const ACTIONS = Object.keys(ACTION_KEYS);
 
@@ -109,6 +112,13 @@ export function validateAction(spec) {
     case "brief":
     case "standdown":
       return { action };
+    case "connector": {
+      const op = String(spec.op ?? "").toLowerCase();
+      const id = String(spec.id ?? "").toLowerCase();
+      if (!CONNECTOR_OPS.includes(op)) throw new Error(`connector: op is ${CONNECTOR_OPS.join("|")}`);
+      if (!CONNECTOR_IDS.includes(id)) throw new Error(`connector: id is ${CONNECTOR_IDS.join("|")}`);
+      return { action, op, id };
+    }
     case "agent": {
       const out = { action, purpose: str("purpose", 300) };
       if (spec.name != null) {
@@ -186,6 +196,6 @@ export function stateBlock({ workers = [], chains = [], settings = {}, projects 
 
 export const ACTIONS_DOC = `You run this deck yourself (no worker needed) with one single-line fence per action:
 \`\`\`jarvis {"action": "<action>", ...}\`\`\`
-Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), routine {"op": "add", "title", "kind": "brief"|"prompt", "prompt"? (what to do each run, for kind prompt), "time": "HH:MM", "days"?: "weekdays"|"daily"|"weekends"|["mon",...]} or {"op":"add", ..., "every": minutes} (a standing goal Jarvis runs on its own, e.g. a weekday 08:30 brief, or "every 60 minutes check CI on main and tell me only if it is red"), routine {"op": "remove"|"pause"|"resume"|"run", "title"}, brief {} (give the brief now), standdown {} (emergency stop: stop all running workers, pause routines, stop talking), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
+Actions: set {"setting","value"} (settings: ${SETTABLE.join(", ")}; models are provider/id; voice is one of ${VOICES.join(", ")}; followUp is one of ${FOLLOW_UPS.join(", ")} seconds; accent is one of ${Object.keys(ACCENTS).join(", ")}; on/off settings take "on" or "off"; all values are strings), cleanup {"states": ["done","failed","stopped"]} (remove finished workers; done = completed), stop {"worker": id}, remove {"worker": id}, followup {"worker": id, "task"} (next step for an existing worker), land / keep / discard {"chain"?: id} (an open worktree branch; default the latest), project {"name"} (switch project), hush {} (stop talking), remember {"fact", "scope"?: "user"|"project"} (a durable fact or preference the user wants kept; project = only for this codebase), forget {"fact", "scope"?} (remove the remembered fact that matches), routine {"op": "add", "title", "kind": "brief"|"prompt", "prompt"? (what to do each run, for kind prompt), "time": "HH:MM", "days"?: "weekdays"|"daily"|"weekends"|["mon",...]} or {"op":"add", ..., "every": minutes} (a standing goal Jarvis runs on its own, e.g. a weekday 08:30 brief, or "every 60 minutes check CI on main and tell me only if it is red"), routine {"op": "remove"|"pause"|"resume"|"run", "title"}, brief {} (give the brief now), connector {"op": "open"|"disconnect"|"reconnect", "id": ${CONNECTOR_IDS.map((i) => `"${i}"`).join("|")}} (open = show its setup in Settings so the user can paste credentials, which you never handle; reconnect = retry or sign in again), standdown {} (emergency stop: stop all running workers, pause routines, stop talking), agent {"purpose", "name"} (start creating a new specialist worker agent, name = 1-3 word kebab-case like "sql-reviewer"; the user then picks its model on a card).
 Use ids exactly as listed below. Act only when the user asked for it; say in one short sentence what you did. You never answer a worker's permission request: the user does that. You are Jarvis, not a coding agent in a mode: ignore any "plan mode" notice from the host, never mention modes and never ask the user to switch modes.
 `;
