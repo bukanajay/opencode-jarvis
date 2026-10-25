@@ -79,6 +79,7 @@ const BrainState = Annotation.Root({
   context: Annotation({ reducer: (_a, b) => b, default: () => "" }),
   actions: Annotation({ reducer: (_a, b) => b, default: () => [] }),
   ephemeral: Annotation({ reducer: (_a, b) => b, default: () => false }),
+  language: Annotation({ reducer: (_a, b) => b, default: () => "en" }),
 });
 
 // Act convention: think may emit single-line ```dispatch {"task": "...", "agent": "optional-id"}```
@@ -179,6 +180,15 @@ export function fencedFilter(forward) {
 // transcript; speechFor() falls back to a local summary if this is missing.
 export const VOICE_ADDENDUM = `The user is listening by voice. Also add exactly one single-line fence with what you would SAY out loud: one or two short plain sentences (under 40 words) summarising your reply, no code, file paths, symbols or markdown:\n\`\`\`speak {"text": "<spoken summary>"}\`\`\`\n`;
 
+// Talking to Jarvis in Hindi or Marathi (setting listenLanguage): answer in
+// it, and write the spoken line in Devanagari, which the voice pronounces with
+// Hindi / Marathi rules; romanized Hindi would be read as English.
+export function languageAddendum(language) {
+  if (language === "mr") return "The user is speaking Marathi: reply in Marathi. Write the speak line in Marathi in Devanagari script; English technical words may stay in Latin script.\n";
+  if (language === "hi") return "The user is speaking Hindi / Hinglish: reply the way they speak (Hinglish is fine in the visible reply). Write the speak line in Hindi in Devanagari script; English technical words may stay in Latin script.\n";
+  return "";
+}
+
 // The brain sometimes answers "I can't access your shell, run X yourself"
 // instead of delegating. With no dispatch fence, that is a dropped task:
 // Main hands the request to a worker anyway (workers have the shell).
@@ -190,7 +200,7 @@ export function needsWorkerFallback(reply, dispatches = []) {
   return NO_ACCESS_RE.test(t) || RUN_IT_YOURSELF_RE.test(t);
 }
 
-export function buildThinkPrompt(text, memories, registry, project = null, { voice = false, userName = "", context = "" } = {}) {
+export function buildThinkPrompt(text, memories, registry, project = null, { voice = false, userName = "", context = "", language = "en" } = {}) {
   const nameLine = userName ? `The user's name is ${userName}; use it naturally now and then, not in every reply. ` : "";
   const projLine = project?.dir ? `Current project: ${project.name} (${project.dir}). ` : "";
   const memLine = memories.length > 0
@@ -198,7 +208,7 @@ export function buildThinkPrompt(text, memories, registry, project = null, { voi
   const fleetLine = (registry ?? []).length > 0
     ? `Fleet agents you can delegate to: ${(registry ?? []).map((a) => `${a.id}${a.description ? ` (${a.description.slice(0, 80)})` : ""}`).join("; ")}. Omit "agent" to let routing decide.\n`
     : `No fleet agents exist yet; do not emit dispatch fences, say what you need instead.\n`;
-  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${nameLine}${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands yourself, but your workers can: they have the full tool set (shell, edit, web) on the user's machine, and anything risky comes back to the user as a permission prompt they answer on the card or by voice. So whenever a request needs anything beyond reading the project — changing or running something (edit, fix, implement, run tests, build), or checking the machine itself (is a tool installed, versions, env vars, processes, ports, git state, files outside the project) — you MUST delegate with a fence or the task is dropped. Never tell the user to run a command themselves and never say you lack shell access: delegate instead. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a dispatch fence.\n${ACTIONS_DOC}${context ? `Right now:\n${context}\n` : ""}${voice ? VOICE_ADDENDUM : ""}User: ${text}`;
+  return `You are Jarvis, a concise voice-and-text development assistant that can delegate work to a fleet of subagents. ${nameLine}${projLine}${memLine}${fleetLine}You have read-only access to the project: read, grep, glob and list files yourself to answer questions about the code, and to write precise tasks (name the files and functions involved). You cannot edit files or run commands yourself, but your workers can: they have the full tool set (shell, edit, web) on the user's machine, and anything risky comes back to the user as a permission prompt they answer on the card or by voice. So whenever a request needs anything beyond reading the project — changing or running something (edit, fix, implement, run tests, build), or checking the machine itself (is a tool installed, versions, env vars, processes, ports, git state, files outside the project) — you MUST delegate with a fence or the task is dropped. Never tell the user to run a command themselves and never say you lack shell access: delegate instead. Reply briefly in your own voice AND append one single-line fence per task (no newlines inside the JSON):\n\`\`\`dispatch {"task": "<self-contained instruction>", "agent": "<optional id>"}\`\`\`\nKeep the visible reply short; for code questions answer from what you read. Never put anything but {"task", "agent?"} in a dispatch fence.\n${ACTIONS_DOC}${context ? `Right now:\n${context}\n` : ""}${voice ? VOICE_ADDENDUM + languageAddendum(language) : ""}User: ${text}`;
 }
 
 // One streamed turn on the brain session, fences held back from the stream.
@@ -233,7 +243,7 @@ function buildGraph(handlers) {
   g.addNode("think", async (state) => {
     const { client } = await ensureClient();
     const registry = await getFleetRegistry(client, projectDir()).catch(() => []);
-    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice, userName: loadStore().settings.userName, context: state.context });
+    const prompt = buildThinkPrompt(state.text, state.memories, registry, { dir: projectDir(), name: projectName() }, { voice: state.voice, userName: loadStore().settings.userName, context: state.context, language: state.language });
     const r = await brainTurn(prompt, handlers.onDelta, state.files);
     return { reply: normalizeFences(r.text), status: r.status };
   });
@@ -272,7 +282,7 @@ function buildGraph(handlers) {
 export function brainRespond(text, onDelta, opts = {}) {
   return serialize(async () => {
     compiled = buildGraph({ onDelta });
-    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true, context: opts.context ?? "", ephemeral: opts.ephemeral === true });
+    const out = await compiled.invoke({ text, files: opts.files ?? [], voice: opts.voice === true, context: opts.context ?? "", ephemeral: opts.ephemeral === true, language: opts.language ?? "en" });
     compiled = null;
     return { reply: out.reply, status: out.status ?? "ok", modelUsed: brainModelUsed, memoriesUsed: out.memories ?? [], facts: out.facts ?? [], dispatches: out.dispatches ?? [], warnings: out.warnings ?? [], speak: out.speak ?? null, actions: out.actions ?? [] };
   });
@@ -315,7 +325,7 @@ export function decideReview(reply, round, maxRounds = MAX_ROUNDS) {
 // Review turn for a finished worker: report in, streamed verdict out, at most
 // one next step (followup to the same worker, or a new dispatch). Execution
 // stays in main, like brainRespond.
-export function brainReview(report, onDelta, { voice = false } = {}) {
+export function brainReview(report, onDelta, { voice = false, language = "en" } = {}) {
   return serialize(async () => {
     const { client } = await ensureClient();
     // Review in the worker's own project, even if the user switched away.
@@ -324,7 +334,7 @@ export function brainReview(report, onDelta, { voice = false } = {}) {
       recallAll(report.task, 6, directory).then((fs) => fs.map((f) => f.text)).catch(() => []),
       getFleetRegistry(client, directory).catch(() => []),
     ]);
-    const prompt = buildReviewPrompt(report, { memories, registry }) + (voice ? `\n${VOICE_ADDENDUM}` : "");
+    const prompt = buildReviewPrompt(report, { memories, registry }) + (voice ? `\n${VOICE_ADDENDUM}${languageAddendum(language)}` : "");
     const r = await brainTurn(prompt, onDelta, undefined, directory);
     if (r.status !== "ok") return { reply: r.text, status: r.status, modelUsed: brainModelUsed, followup: null, dispatch: null, warnings: [], speak: null };
     const decision = decideReview(r.text, report.round);

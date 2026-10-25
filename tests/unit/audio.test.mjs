@@ -20,3 +20,18 @@ test("toUtterance: engine label carried, source is speech", () => {
   assert.equal(u.source, "speech");
   assert.equal(u.engine, "parakeet-v3");
 });
+
+test("languageArgs: English stays on Parakeet; Hindi -> Apex, Marathi -> multilingual Whisper; missing model is a clear error", async () => {
+  const { languageArgs } = await import("../../apps/main/src/audio.js");
+  const yes = () => true;
+  assert.deepEqual(languageArgs("en", { exists: yes }), []);
+  assert.deepEqual(languageArgs("hi", { modelsDir: "/m", exists: yes }), ["--engine", "whisper", "--model", "/m/ggml-apex-hinglish-q8_0.bin", "--language", "hi"]);
+  assert.deepEqual(languageArgs("mr", { modelsDir: "/m", exists: yes }), ["--engine", "whisper", "--model", "/m/ggml-large-v3-turbo-q8_0.bin", "--language", "mr"]);
+  assert.throws(() => languageArgs("mr", { exists: () => false }), /Marathi needs a speech model: npm run fetch:whisper-model -- multilingual/);
+});
+
+test("listenLanguage setting: en | hi | mr", async () => {
+  const { validateAppCommand } = await import("../../apps/main/src/shell.js");
+  for (const v of ["en", "hi", "mr"]) assert.doesNotThrow(() => validateAppCommand("set.listenLanguage", { value: v }));
+  assert.throws(() => validateAppCommand("set.listenLanguage", { value: "ta" }), /en\|hi\|mr/);
+});

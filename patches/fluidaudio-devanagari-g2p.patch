@@ -1,0 +1,30 @@
+diff --git a/Sources/FluidAudioTTS/TextToSpeech/Kokoro/Pipeline/Preprocess/KokoroChunker.swift b/Sources/FluidAudioTTS/TextToSpeech/Kokoro/Pipeline/Preprocess/KokoroChunker.swift
+index 6c2cdfb..6f62578 100644
+--- a/Sources/FluidAudioTTS/TextToSpeech/Kokoro/Pipeline/Preprocess/KokoroChunker.swift
++++ b/Sources/FluidAudioTTS/TextToSpeech/Kokoro/Pipeline/Preprocess/KokoroChunker.swift
+@@ -513,6 +513,16 @@ enum KokoroChunker {
+         return []
+     }
+ 
++    /// Jarvis patch (patches/fluidaudio-devanagari-g2p.patch): words in
++    /// Devanagari are sounded out with eSpeak's Hindi or Marathi rules
++    /// (FLUIDAUDIO_DEVANAGARI_VOICE, default "hi"); everything else keeps
++    /// American English. Upstream always used "en-us", which reads Devanagari
++    /// as noise.
++    private static let devanagariVoice = ProcessInfo.processInfo.environment["FLUIDAUDIO_DEVANAGARI_VOICE"] ?? "hi"
++    private static func espeakVoice(for word: String) -> String {
++        word.unicodeScalars.contains { (0x0900...0x097F).contains($0.value) } ? devanagariVoice : "en-us"
++    }
++
+     private static func resolvePhonemes(
+         for original: String,
+         normalized: String,
+@@ -531,7 +541,7 @@ enum KokoroChunker {
+             phonemes = lexicon[normalized]
+         }
+ 
+-        if phonemes == nil, let ipa = try EspeakG2P.shared.phonemize(word: normalized) {
++        if phonemes == nil, let ipa = try EspeakG2P.shared.phonemize(word: normalized, espeakVoice: espeakVoice(for: normalized)) {
+             let mapped = PhonemeMapper.mapIPA(ipa, allowed: allowed)
+             if !mapped.isEmpty {
+                 phonemes = mapped
