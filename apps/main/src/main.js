@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting } from "./meeting.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES } from "./meeting.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
@@ -1257,12 +1257,13 @@ app.whenReady().then(async () => {
   // Meeting mode: one long capture of both sides of a call (meeting.js).
   // The mic belongs to the meeting while it runs: the voice loop waits and
   // Jarvis stays quiet.
-  ipcMain.handle("meeting.start", async (_e, { apps } = {}) => {
+  ipcMain.handle("meeting.start", async (_e, { apps, engine } = {}) => {
     if (isMeetingActive()) return { ok: false, reason: "meeting already running" };
     if (isListening()) stopListening();
     try {
       const m = startMeeting({
         apps: Array.isArray(apps) ? apps.filter((a) => typeof a === "string" && /^[\w.-]+$/.test(a)) : [],
+        engine: Object.hasOwn(ENGINES, engine) ? engine : "parakeet",
         onEvent: (ev) => win?.webContents.send("meeting.event", ev),
       });
       return { ok: true, id: m.id, dir: m.dir };

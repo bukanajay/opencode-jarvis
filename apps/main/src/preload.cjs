@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld("jarvis", {
   commitUtterance: (utterance, extra) => ipcRenderer.invoke("utterance.commit", utterance, extra ?? {}),
   audioStart: (opts) => ipcRenderer.invoke("audio.start", opts ?? {}),
   audioStop: () => ipcRenderer.invoke("audio.stop"),
-  meetingStart: (apps) => ipcRenderer.invoke("meeting.start", { apps: apps ?? [] }),
+  meetingStart: (apps, engine) => ipcRenderer.invoke("meeting.start", { apps: apps ?? [], engine }),
   meetingStop: () => ipcRenderer.invoke("meeting.stop"),
   meetingState: () => ipcRenderer.invoke("meeting.state"),
   meetingList: () => ipcRenderer.invoke("meeting.list"),

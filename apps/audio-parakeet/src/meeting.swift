@@ -10,6 +10,7 @@
 // levels main needs to judge speaker echo.
 //
 //   parakeet --meeting DIR [--app BUNDLE_PREFIX ...] [--no-mic]
+//            [--engine parakeet|whisper --model GGML --language hi]   (whisper.swift)
 //   parakeet --meeting DIR --replay-mic A.wav --replay-system B.wav   (no devices)
 //
 // Stops on a `stop` line or EOF on stdin, SIGTERM/SIGINT, or when the parent
@@ -26,7 +27,7 @@ import CoreAudio
 import AudioToolbox
 import FluidAudio
 
-let meetingPartialEvery = envNumber("JARVIS_MEETING_PARTIAL_MS", 1200) / 1000
+nonisolated(unsafe) var meetingPartialEvery = envNumber("JARVIS_MEETING_PARTIAL_MS", 1200) / 1000
 
 // MARK: responsibility
 
@@ -426,6 +427,7 @@ final class Meeting: @unchecked Sendable {
             }
             group.notify(queue: self.q) {
                 for t in self.tracks.values { t.close() }
+                self.asr?.shutdown()
                 let seconds = Double(self.tracks.values.map(\.written).max() ?? 0) / Double(sampleRate)
                 emit(["kind": "status", "state": "stopped", "note": self.dir, "seconds": (seconds * 10).rounded() / 10])
                 exit(0)
@@ -497,9 +499,25 @@ func runMeeting() -> Never {
         sources.append(s)
     }
 
+    // Parakeet (English and European languages, fastest) or Whisper (Hindi
+    // and Hinglish, whisper.swift). Only the chosen model is loaded.
+    let engine = argValues("--engine").first ?? "parakeet"
+    let model = argValues("--model").first ?? ""
+    let language = argValues("--language").first ?? "hi"
+    var note = engineNote
+    if engine == "whisper" {
+        if model.isEmpty || !FileManager.default.fileExists(atPath: model) { fail("unavailable", "whisper model not found: \(model)", code: 1) }
+        if !whisperAvailable { fail("unavailable", "this parakeet was built without whisper.cpp", code: 1) }
+        note = "whisper \((model as NSString).lastPathComponent) (\(language)) on Metal"
+        meetingPartialEvery = whisperPartialEvery
+    } else if engine != "parakeet" {
+        fail("unavailable", "unknown engine \(engine)", code: 1)
+    }
     Task {
-        do { m.setASR(Transcriber(try await loadASR())) }
-        catch { fail("unavailable", "model load failed: \(error)", code: 1) }
+        do {
+            if engine == "whisper" { m.setASR(try loadWhisper(model: model, language: language).0) }
+            else { m.setASR(Transcriber(try await loadASR())) }
+        } catch { fail("unavailable", "model load failed: \(error)", code: 1) }
     }
 
     if replay {
@@ -516,7 +534,7 @@ func runMeeting() -> Never {
                 if ready { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            emit(["kind": "status", "state": "listening", "note": engineNote + " (meeting replay)", "route": "replay"])
+            emit(["kind": "status", "state": "listening", "note": note + " (meeting replay)", "route": "replay", "engine": engine])
             let total = max(a.count, b.count) + sampleRate * 3
             let chunk = sampleRate / 10
             var i = 0
@@ -550,7 +568,7 @@ func runMeeting() -> Never {
         fail("mic-error", "\(error)", code: 3)
     }
     let route = outputRoute().route
-    emit(["kind": "status", "state": "listening", "note": "\(engineNote), tapping \(m.target.note)", "route": route])
+    emit(["kind": "status", "state": "listening", "note": "\(note), tapping \(m.target.note)", "route": route, "engine": engine])
     m.q.asyncAfter(deadline: .now() + 1) { m.poll() }
     withExtendedLifetime(sources) { RunLoop.main.run() }
     exit(0)

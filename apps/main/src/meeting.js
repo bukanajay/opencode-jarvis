@@ -16,6 +16,17 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PARAKEET_BIN = path.join(here, "../../audio-parakeet/bin/parakeet");
 
+// Speech engines for a meeting. Parakeet: English and European languages,
+// fastest. Whisper: Hindi and Hinglish (Oriserve Whisper-Hindi2Hinglish-Apex
+// writes Hindi as romanized Hinglish), via whisper.cpp in the same helper.
+export const ENGINES = {
+  parakeet: { label: "English (Parakeet)" },
+  whisper: { label: "Hindi + Hinglish (Whisper)", language: "hi" },
+};
+export function whisperModel(env = process.env) {
+  return env.JARVIS_WHISPER_MODEL ?? path.join(os.homedir(), ".config", "jarvis", "models", "ggml-apex-hinglish-q8_0.bin");
+}
+
 export function meetingsRoot(env = process.env) {
   return env.JARVIS_MEETINGS_DIR ?? path.join(os.homedir(), ".config", "jarvis", "meetings");
 }
@@ -108,15 +119,18 @@ export const isMeetingActive = () => active !== null;
 export const activeMeeting = () => (active ? { id: active.id, dir: active.dir, startedAt: active.meta.startedAt, route: active.meta.route } : null);
 
 // onEvent({ type: "segment" | "partial" | "status" | "stopped", ... })
-export function startMeeting({ apps = [], bin = PARAKEET_BIN, root = meetingsRoot(), replay, onEvent = () => {}, now = new Date() } = {}) {
+export function startMeeting({ apps = [], engine = "parakeet", model = whisperModel(), bin = PARAKEET_BIN, root = meetingsRoot(), replay, onEvent = () => {}, now = new Date() } = {}) {
   if (active) throw new Error("meeting already running");
+  if (!ENGINES[engine]) throw new Error(`unknown speech engine: ${engine}`);
   if (!existsSync(bin)) throw new Error("meeting mode needs the live parakeet helper: npm run build:parakeet");
+  if (engine === "whisper" && !existsSync(model)) throw new Error(`Hindi/Hinglish needs the Whisper model: npm run fetch:whisper-model (expected ${model})`);
   const { id, dir } = freshDir(root, meetingId(now));
-  const meta = { id, startedAt: now.toISOString(), endedAt: null, apps, route: null, status: "recording", error: null, seconds: null };
+  const meta = { id, startedAt: now.toISOString(), endedAt: null, apps, engine, route: null, status: "recording", error: null, seconds: null };
   const writeMeta = () => writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   writeMeta();
 
   const args = ["--meeting", dir, ...apps.flatMap((a) => ["--app", a])];
+  if (engine === "whisper") args.push("--engine", "whisper", "--model", model, "--language", ENGINES.whisper.language);
   if (replay) args.push("--replay-mic", replay.mic, "--replay-system", replay.system);
   const child = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
   const log = createMeetingLog();
@@ -161,7 +175,7 @@ export function startMeeting({ apps = [], bin = PARAKEET_BIN, root = meetingsRoo
         if (msg.route) { meta.route = msg.route; log.setRoute(msg.route); writeMeta(); }
         if (msg.state === "stopped") meta.seconds = msg.seconds ?? null;
         if (["mic-denied", "mic-error", "unavailable"].includes(msg.state)) lastError = `${msg.state}${msg.note ? ` — ${msg.note}` : ""}`;
-        onEvent({ type: "status", meetingId: id, state: msg.state, note: msg.note ?? "", route: msg.route });
+        onEvent({ type: "status", meetingId: id, state: msg.state, note: msg.note ?? "", route: msg.route, engine: msg.engine });
       }
     }
   });

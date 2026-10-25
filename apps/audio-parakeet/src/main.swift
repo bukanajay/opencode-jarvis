@@ -138,18 +138,23 @@ let floorRMS = Float(envNumber("JARVIS_PARAKEET_MIN_RMS", 0.008))         // abs
 
 // One model, two streams: AsrManager keeps separate decoder state per
 // source but is not safe to call concurrently, so calls queue up here.
+// The same queue fronts Whisper (meeting mode, Hindi/Hinglish; whisper.swift).
 final class Transcriber: @unchecked Sendable {
-    let asr: AsrManager
+    private let run: ([Float], AudioSource) async -> String
+    var shutdown: () -> Void = {}    // before exit: Whisper must release its Metal buffers
     private let lock = NSLock()
     private var tail: Task<Void, Never>?
-    init(_ asr: AsrManager) { self.asr = asr }
+    init(_ asr: AsrManager) {
+        run = { samples, source in clean((try? await asr.transcribe(padded(samples), source: source))?.text ?? "") }
+    }
+    init(run: @escaping ([Float], AudioSource) async -> String) { self.run = run }
 
     func text(_ samples: [Float], _ source: AudioSource) async -> String {
         lock.lock()
         let prev = tail
         let job = Task { () -> String in
             _ = await prev?.value
-            return clean((try? await self.asr.transcribe(padded(samples), source: source))?.text ?? "")
+            return await self.run(samples, source)
         }
         tail = Task { _ = await job.value }
         lock.unlock()
@@ -187,7 +192,8 @@ final class Listener: @unchecked Sendable {
     var revision = 0
     var lastText = ""
     var busy = false
-    var committing = false
+    var committing = false           // one-shot only: the final is on its way
+    var inFlight = 0                 // meeting: utterances handed over, not transcribed yet
 
     init(q: DispatchQueue = DispatchQueue(label: "jarvis.parakeet"), source: AudioSource = .microphone, stream: String? = nil) {
         self.q = q
@@ -259,11 +265,13 @@ final class Listener: @unchecked Sendable {
         lastPartialAt = now
         let samples = clip()
         let source = self.source
+        let id = self.id
         Task {
             let text = await asr.text(samples, source)
             self.q.async {
                 self.busy = false
-                guard !self.committing, !text.isEmpty, text != self.lastText else { return }
+                // Meeting mode moves on to a new utterance (new id) without waiting.
+                guard !self.committing, id == self.id, !text.isEmpty, text != self.lastText else { return }
                 self.lastText = text
                 self.revision += 1
                 var msg: [String: Any] = ["kind": "partial", "id": self.id, "text": text, "revision": self.revision]
@@ -276,12 +284,35 @@ final class Listener: @unchecked Sendable {
     // done fires on q once this utterance is settled (meeting stop waits on it).
     func commit(done: (() -> Void)? = nil) {
         guard let asr, let start = speechStart else { done?(); return } // models still loading: retried on the next tick
-        committing = true
         debug(["stream": stream ?? "-", "commit": Double(offset + start) / Double(sampleRate), "end": now, "voiced": voiced])
         let samples = clip()
         let startSec = Double(offset + start) / Double(sampleRate)
         let endSec = min(now, lastVoice + 0.1) // not the trailing silence that ended it
         let source = self.source
+        if let onCommit {
+            // Meeting: hand the clip over and listen on at once. Whatever is
+            // said while it is transcribed (Whisper's first pass takes over a
+            // second) starts the next utterance instead of being dropped.
+            let id = self.id
+            self.id = UUID().uuidString
+            speechStart = nil
+            voiced = 0
+            lastText = ""
+            revision = 0
+            inFlight += 1
+            Task {
+                let text = await asr.text(samples, source)
+                self.q.async {
+                    debug(["stream": self.stream ?? "-", "result": text])
+                    self.inFlight -= 1
+                    // Empty: noise, a cough, a door.
+                    if !text.isEmpty { onCommit(Committed(id: id, text: text, start: startSec, end: endSec)) }
+                    done?()
+                }
+            }
+            return
+        }
+        committing = true
         Task {
             let text = await asr.text(samples, source)
             self.q.async {
@@ -295,27 +326,20 @@ final class Listener: @unchecked Sendable {
                     done?()
                     return
                 }
-                guard let onCommit = self.onCommit else {
-                    emit(["kind": "final", "id": id, "text": text])
-                    exit(0)
-                }
-                self.id = UUID().uuidString
-                self.revision = 0
-                onCommit(Committed(id: id, text: text, start: startSec, end: endSec))
-                done?()
+                emit(["kind": "final", "id": id, "text": text])
+                exit(0)
             }
         }
     }
 
-    // Meeting stop: commit whatever is being said right now.
+    // Meeting stop: commit whatever is being said right now, then wait for
+    // every utterance still being transcribed.
     func flush(done: @escaping () -> Void) {
-        if committing {
-            q.asyncAfter(deadline: .now() + 0.1) { self.flush(done: done) }
-        } else if speechStart != nil, voiced >= minSpeech {
-            commit(done: done)
-        } else {
-            done()
+        if speechStart != nil, voiced >= minSpeech { commit() }
+        func settle() {
+            if inFlight > 0 { q.asyncAfter(deadline: .now() + 0.1) { settle() } } else { done() }
         }
+        settle()
     }
 }
 

@@ -356,6 +356,10 @@
       <div id="meeting" aria-live="polite">
         <div class="row" id="mt-setup">
           <select id="mt-app" aria-label="Call app"></select>
+          <select id="mt-lang" aria-label="Meeting language">
+            <option value="parakeet">English</option>
+            <option value="whisper">Hindi + Hinglish</option>
+          </select>
           <button type="button" id="mt-go">Start meeting</button>
           <button type="button" class="ghost" id="mt-cancel">Cancel</button>
           <span class="res">Stays on this Mac. Tell everyone on the call it is being transcribed.</span>
@@ -1319,6 +1323,9 @@
   // "All system audio" works with any call app but also hears anything else
   // playing; tapping just the call app is cleaner. Remember the last pick.
   try { const last = localStorage.getItem("jarvis.meetingApp"); if (last != null && MEETING_APPS.some(([v]) => v === last)) $("mt-app").value = last; } catch {}
+  // English runs on Parakeet (fastest); Hindi + Hinglish on Whisper, which
+  // writes Hindi as romanized Hinglish and also handles English.
+  try { const lang = localStorage.getItem("jarvis.meetingLang"); if (lang === "parakeet" || lang === "whisper") $("mt-lang").value = lang; } catch {}
   let meetingClock = null;
   const mtPartial = new Map(); // stream -> row showing what is being said now
   function paintMeeting(mode, startedAt) {
@@ -1369,7 +1376,7 @@
       if (cur) cur.replaceWith(row); else mtPlace(row, ev.stream);
       mtPartial.set(ev.stream, row);
     } else if (ev.type === "status") {
-      if (ev.state === "listening") $("mt-status").textContent = `recording${ev.route && ev.route !== "replay" ? ` · ${ev.route}` : ""}`;
+      if (ev.state === "listening") $("mt-status").textContent = `recording${ev.engine === "whisper" ? " · hinglish" : ""}${ev.route && ev.route !== "replay" ? ` · ${ev.route}` : ""}`;
       else if (ev.state === "system-audio-denied") addSys("Meeting: the call app is playing but Jarvis hears silence. Allow System Audio Recording for parakeet in System Settings → Privacy & Security.", { bad: true });
     } else if (ev.type === "stopped") {
       paintMeeting("");
@@ -1386,9 +1393,10 @@
   $("mt-cancel").onclick = () => paintMeeting("");
   $("mt-go").onclick = async () => {
     const app = $("mt-app").value;
-    try { localStorage.setItem("jarvis.meetingApp", app); } catch {}
+    const engine = $("mt-lang").value;
+    try { localStorage.setItem("jarvis.meetingApp", app); localStorage.setItem("jarvis.meetingLang", engine); } catch {}
     $("mt-lines").innerHTML = "";
-    const r = await window.jarvis.meetingStart(app ? [app] : []);
+    const r = await window.jarvis.meetingStart(app ? [app] : [], engine);
     if (!r.ok) { paintMeeting(""); addSys(`Meeting did not start: ${r.reason}`, { bad: true }); return; }
     $("mt-status").textContent = "starting";
     paintMeeting("on");

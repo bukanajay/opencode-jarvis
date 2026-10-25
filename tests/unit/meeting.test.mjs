@@ -80,6 +80,7 @@ function fakeHelper() {
   writeFileSync(bin, `#!/usr/bin/env node
 const lines = ${JSON.stringify(lines)};
 const dir = process.argv[process.argv.indexOf("--meeting") + 1];
+require("node:fs").writeFileSync(dir + "/args.json", JSON.stringify(process.argv.slice(2)));
 for (const l of lines) console.log(JSON.stringify(l));
 process.stdin.on("data", (d) => {
   if (String(d).includes("stop")) {
@@ -125,6 +126,30 @@ test("startMeeting/stopMeeting: events, echo hidden, files written, one at a tim
   const m2 = startMeeting({ bin: fakeHelper(), root, now: new Date(2026, 9, 25, 14, 30) });
   assert.equal(m2.id, "2026-10-25-1430-2");
   await stopMeeting();
+});
+
+test("startMeeting: whisper engine passes model and language, and is recorded", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const model = path.join(root, "model.bin");
+  writeFileSync(model, "x");
+  const m = startMeeting({ bin: fakeHelper(), root, engine: "whisper", model });
+  await new Promise((r) => setTimeout(r, 300));
+  await stopMeeting();
+  const args = JSON.parse(readFileSync(path.join(m.dir, "args.json"), "utf8"));
+  assert.deepEqual(args.slice(args.indexOf("--engine")), ["--engine", "whisper", "--model", model, "--language", "hi"]);
+  assert.equal(getMeeting(m.id, root).engine, "whisper");
+});
+
+test("startMeeting: parakeet is the default; bad engine or missing model are clear errors", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const m = startMeeting({ bin: fakeHelper(), root });
+  await new Promise((r) => setTimeout(r, 300));
+  await stopMeeting();
+  assert.ok(!JSON.parse(readFileSync(path.join(m.dir, "args.json"), "utf8")).includes("--engine"));
+  assert.equal(getMeeting(m.id, root).engine, "parakeet");
+  assert.throws(() => startMeeting({ bin: fakeHelper(), root, engine: "bogus" }), /unknown speech engine/);
+  assert.throws(() => startMeeting({ bin: fakeHelper(), root, engine: "whisper", model: "/nope.bin" }), /fetch:whisper-model/);
+  assert.equal(isMeetingActive(), false);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {

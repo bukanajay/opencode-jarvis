@@ -19,7 +19,7 @@ if (process.platform !== "darwin" || process.arch !== "arm64") {
   process.exit(0);
 }
 if (!existsSync(BIN)) throw new Error("no live binary: run npm run build:parakeet");
-const { startMeeting, stopMeeting, getMeeting } = await import("../apps/main/src/meeting.js");
+const { startMeeting, stopMeeting, getMeeting, whisperModel } = await import("../apps/main/src/meeting.js");
 
 const RATE = 16000;
 const dir = mkdtempSync(path.join(os.tmpdir(), "jarvis-meeting-"));
@@ -56,12 +56,19 @@ function speech(name, voice, text) {
   return readPcm(wav);
 }
 
-async function run(echoDb) {
-  const lines = [
-    { who: "You", stream: "mic", voice: "Samantha", text: "Morning everyone, the onboarding flow shipped yesterday." },
-    { who: "Them", stream: "system", voice: "Daniel", text: "Nice work. Can you send me the release notes before Friday?" },
-    { who: "You", stream: "mic", voice: "Samantha", text: "Sure, I will send them this afternoon." },
-  ];
+const ENGLISH = [
+  { who: "You", stream: "mic", voice: "Samantha", text: "Morning everyone, the onboarding flow shipped yesterday." },
+  { who: "Them", stream: "system", voice: "Daniel", text: "Nice work. Can you send me the release notes before Friday?" },
+  { who: "You", stream: "mic", voice: "Samantha", text: "Sure, I will send them this afternoon." },
+];
+// Whisper (Hindi + Hinglish): you answer in Hindi; Apex writes it romanized.
+// Spelling varies (doonga / dunga), so lines are checked by key words.
+const HINDI = [
+  { who: "Them", stream: "system", voice: "Daniel", text: "Can you send me the release notes before Friday?", keys: ["release", "notes", "friday"] },
+  { who: "You", stream: "mic", voice: "Lekha", text: "हाँ, मैं आज शाम तक रिलीज़ नोट्स भेज दूँगा।", keys: ["aaj", "release", "notes", "bhej"] },
+];
+
+async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
   const gap = RATE; // 1 s between turns
   const clips = lines.map((l, i) => speech(`l${i}`, l.voice, l.text));
   const total = gap + clips.reduce((n, c) => n + c.length + gap, 0) + gap;
@@ -76,7 +83,7 @@ async function run(echoDb) {
     }
     at += c.length + gap;
   });
-  const tag = `echo${echoDb}`;
+  const tag = `${engine}-echo${echoDb}`;
   writePcm(path.join(dir, `${tag}-mic.wav`), mic);
   writePcm(path.join(dir, `${tag}-system.wav`), system);
 
@@ -85,6 +92,7 @@ async function run(echoDb) {
   const m = startMeeting({
     bin: BIN,
     root: path.join(dir, "meetings"),
+    engine,
     replay: { mic: path.join(dir, `${tag}-mic.wav`), system: path.join(dir, `${tag}-system.wav`) },
     onEvent: (e) => events.push(e),
   });
@@ -94,18 +102,21 @@ async function run(echoDb) {
   console.log(`[${tag} dB] replay-ok: ${(Date.now() - t0) / 1000}s for ${(total / RATE).toFixed(1)}s of call`);
 
   const got = getMeeting(m.id, path.join(dir, "meetings"));
-  const want = lines.map((l) => `${l.who}: ${norm(l.text)}`);
-  const have = got.transcript.map((s) => `${s.speaker}: ${norm(s.text)}`);
-  if (JSON.stringify(have) !== JSON.stringify(want)) {
-    throw new Error(`transcript drift\n  want ${JSON.stringify(want)}\n  have ${JSON.stringify(have)}`);
-  }
+  const heard = events.filter((e) => e.type === "segment").map((e) => `${e.segment.speaker}${e.segment.echo ? `(echo:${e.segment.echo})` : ""} ${e.segment.start}-${e.segment.end}: ${e.segment.text}`);
+  const drift = () => new Error(`transcript drift\n  want ${JSON.stringify(lines.map((l) => `${l.who}: ${l.text}`))}\n  have ${JSON.stringify(got.transcript.map((s) => `${s.speaker}: ${s.text}`))}\n  heard ${JSON.stringify(heard, null, 2)}`);
+  if (got.transcript.map((s) => s.speaker).join() !== lines.map((l) => l.who).join()) throw drift();
+  got.transcript.forEach((s, i) => {
+    const ok = lines[i].keys ? lines[i].keys.every((k) => norm(s.text).includes(k)) : norm(s.text) === norm(lines[i].text);
+    if (!ok) throw drift();
+  });
   console.log(`transcript-ok:\n${got.text.split("\n").map((l) => "  " + l).join("\n")}`);
 
   const hidden = events.filter((e) => e.type === "segment" && e.segment.echo);
   if (echoDb >= -15 && !hidden.length) throw new Error("loud echo was never caught as a mic segment: the filter went untested");
   if (hidden.length) console.log(`echo-ok: ${hidden.length} mic segment(s) hidden (${hidden.map((e) => e.segment.echo).join(", ")})`);
   else console.log("echo-ok: the echo never became a mic segment");
-  if (!events.some((e) => e.type === "partial" && e.speaker === "Them")) throw new Error("no live captions from the system stream");
+  // Whisper captions every 2.5 s, longer than these short lines.
+  if (engine === "parakeet" && !events.some((e) => e.type === "partial" && e.speaker === "Them")) throw new Error("no live captions from the system stream");
   for (const f of ["mic.wav", "system.wav", "meta.json", "transcript.jsonl", "segments.jsonl"]) {
     if (!existsSync(path.join(got.dir, f))) throw new Error(`missing ${f}`);
   }
@@ -115,6 +126,9 @@ async function run(echoDb) {
 try {
   await run(-30);
   await run(-12);
+  if (existsSync(whisperModel())) await run(-12, { engine: "whisper", lines: HINDI });
+  else console.log("skip whisper: no model (npm run fetch:whisper-model)");
 } finally {
-  rmSync(dir, { recursive: true, force: true });
+  if (process.env.PROVE_KEEP) console.log(`kept fixtures in ${dir}`);
+  else rmSync(dir, { recursive: true, force: true });
 }

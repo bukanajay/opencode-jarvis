@@ -252,8 +252,7 @@ What changed from the plan:
     European languages; your code-switched lines came out as nonsense
     ("test curvath", "share karma"), and short unclear audio sometimes
     came back as Spanish/Russian ("Y lo que sí", "Ну"). English is solid.
-    Needs a multilingual model (e.g. Whisper large-v3-turbo on device) as
-    an option; decide before Phase 3.
+    Fixed by the Whisper engine below.
   - Backchannels ("Mm-hmm", "Okay") from the other side while you talk are
     real and kept; transcript is ordered by start time, so they sit after
     your long turn begins.
@@ -262,6 +261,42 @@ What changed from the plan:
   retarget path), and a 60-minute run
   (memory stays flat by design: listeners trim to the current utterance,
   WAVs stream to disk).
+
+### Hindi + Hinglish engine (2026-10-25)
+
+Per meeting, the deck offers **English** (Parakeet, default, fastest) or
+**Hindi + Hinglish** (Whisper). Capture, VAD, echo handling and storage are
+shared; only the transcriber differs (`src/whisper.swift`).
+
+- **Model:** Oriserve Whisper-Hindi2Hinglish-Apex (Apache 2.0, large-v3-turbo
+  fine-tuned on ~700 h of noisy Indian-accented Hindi; self-reported WER on
+  Hindi ~40% lower than Whisper large-v3). Writes Hindi as **romanized
+  Hinglish**, keeps English as English. GGML q8_0 (874 MB) from
+  `Marquestra/Whisper-Hindi2Hinglish-Apex-GGML`, SHA-256 pinned:
+  `npm run fetch:whisper-model` → `~/.config/jarvis/models/`.
+- **Runtime:** whisper.cpp v1.9.5, static libs with Metal, linked into
+  parakeet by `build-parakeet.sh` when cmake is available (otherwise the
+  engine reports itself unavailable). Language token `hi`, greedy, no
+  context between utterances, segments with no-speech probability > 0.6 or
+  the literal `nan` dropped. Partials every 2.5 s.
+- **Why not alternatives:** FluidAudio has no Indian-language ASR; plain
+  Whisper turbo writes Hindi in Devanagari and is weak on code-switching;
+  WhisperKit needs SwiftPM, which is broken on this machine.
+- **On your real call (8 min, replayed):** your Hinglish is readable
+  throughout ("Actually main kya kar raha hoon na… ek agent banaaya hai jo
+  voice hamse baat kar paega…"); the other side's "Mm-hmm" / "Y lo que sí"
+  became "Thik hai", "Ji ji", "Ok sir"; 41 s of audio transcribes in ~1.1 s
+  warm. English is a little worse than Parakeet ("steps" for "specs",
+  "section 2" for "too"), hence the per-meeting choice.
+- **Fixed on the way:** ggml-metal asserts at `exit()` while a context holds
+  buffers (meeting saved as *failed*): the context is freed after the last
+  utterance. And meeting commits no longer block the VAD: whatever was said
+  while an utterance was being transcribed (Whisper's first pass takes
+  >1 s) was being dropped; the clip is now handed over and listening goes on
+  at once. `prove:meeting` has a Hindi case (macOS voice Lekha) that caught it.
+- **Open:** noise before a call can still come back as a one-word Devanagari
+  line ("जाज"); an echo whose call-side copy Whisper mis-hears can slip past
+  the text rule.
 
 ## Phase 2 — voice enrollment (your profile)
 

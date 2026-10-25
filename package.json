@@ -29,6 +29,7 @@
     "build:parakeet": "bash scripts/build-parakeet.sh && apps/audio-parakeet/bin/parakeet --prepare && apps/audio-voice/bin/jarvis-voice --prepare",
     "prove:parakeet": "node scripts/prove-parakeet.mjs",
     "prove:meeting": "node scripts/prove-meeting.mjs",
+    "fetch:whisper-model": "bash scripts/fetch-whisper-model.sh",
     "prove:jarvis-voice": "node scripts/prove-jarvis-voice.mjs",
     "eval:brain": "node scripts/eval-brain.mjs",
     "prove:audio": "node scripts/prove-audio.mjs",
