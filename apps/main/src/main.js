@@ -238,7 +238,7 @@ async function speak(win, text, { force = false } = {}) {
   }
   // A hush, a newer line or voice-off while rendering wins.
   if (my !== speakToken || (!force && !isVoiceMode(shellStore()))) return;
-  win?.webContents.send("jarvis.speak", { text: t, voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0, force });
+  win?.webContents.send("jarvis.speak", { text: t, voice: sv.voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0, force });
 }
 function hush(win) {
   speakToken++;
@@ -263,6 +263,9 @@ function onVoiceSettings(name, value) {
   const s = shellStore().settings;
   const sv = speechVoice(s);
   if ((name === "set.voice" || name === "set.listenLanguage") && s.voiceMode === "on") warmVoice(sv.voice, { devanagari: sv.devanagari })?.catch(() => {});
+  // The listen already waiting was started in the old language: restart it
+  // so the very next thing you say is heard in the new one.
+  if (name === "set.listenLanguage" && loopListening) stopListening();
   if (name === "set.voiceMode") {
     if (value === "on") warmVoice(sv.voice, { devanagari: sv.devanagari })?.catch(() => {});
     else stopVoice();
