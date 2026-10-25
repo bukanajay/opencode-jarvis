@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("jarvis", {
   meetingSpeakers: (id) => ipcRenderer.invoke("meeting.speakers", { id }),
   meetingNextToName: () => ipcRenderer.invoke("meeting.nextToName"),
   meetingSummarize: (id) => ipcRenderer.invoke("meeting.summarize", { id }),
+  meetingRetranscribe: (id, engine) => ipcRenderer.invoke("meeting.retranscribe", { id, engine: engine ?? "whisper" }),
   meetingDiscuss: (id) => ipcRenderer.invoke("meeting.discuss", { id: id ?? null }),
   meetingClip: (id, speakerId) => ipcRenderer.invoke("meeting.clip", { id, speakerId }),
   meetingNameSpeaker: (id, speakerId, name, personId) => ipcRenderer.invoke("meeting.nameSpeaker", { id, speakerId, name, personId }),

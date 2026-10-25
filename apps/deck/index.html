@@ -2233,6 +2233,22 @@
         $("q").focus();
       };
       btns.append(sum, talk);
+      if ((m.engine ?? "parakeet") !== "whisper") {
+        const redo = document.createElement("button");
+        redo.type = "button";
+        redo.className = "ghost";
+        redo.textContent = "Redo in Hindi + Hinglish";
+        redo.title = "Transcribe this meeting again with the Hindi + Hinglish engine, on this Mac. The old transcript and notes are kept beside the new ones.";
+        redo.onclick = async () => {
+          redo.disabled = true;
+          redo.textContent = `Re-transcribing… (~${Math.max(1, Math.round((m.seconds ?? 60) / 240))} min)`;
+          const r = await window.jarvis.meetingRetranscribe(m.id);
+          if (!r.ok) { redo.disabled = false; redo.textContent = "Redo in Hindi + Hinglish"; notes.hidden = false; notes.textContent = `Couldn't: ${r.reason}`; return; }
+          addSys(`Re-transcribed the meeting from ${mtgWhen(m.startedAt)} in Hindi + Hinglish: ${r.lines} lines. Summarize it again for fresh notes.`);
+          paintMeetings().catch(() => {});
+        };
+        btns.append(redo);
+      }
       row.append(head, btns, notes);
       list.append(row);
     }

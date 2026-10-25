@@ -8,7 +8,7 @@
 // segment as heard, echo flag included), transcript.jsonl (clean, written at
 // stop), meta.json.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -434,6 +434,54 @@ export function nameSpeaker(meetingId, speakerId, { name, personId } = {}, { roo
     if (m.id !== meetingId) relabelled += relabelMeeting(path.join(root, m.id), people);
   }
   return { person, relabelled, meeting: getMeeting(meetingId, root) };
+}
+
+// Run a saved meeting through the pipeline again with another engine (most
+// often: recorded in English, spoken in Hinglish). Its own WAVs are replayed
+// into a scratch folder inside the meeting with the full stop path (echo,
+// voiceprints, speakers); the results replace the old ones. The old
+// transcript and notes stay beside them as transcript.<engine>.jsonl and
+// summary.<engine>.json (notes describe a transcript, so they go stale).
+// People you confirmed here stay confirmed when their voice is found again.
+export async function retranscribeMeeting(id, { engine = "whisper", root = meetingsRoot(), voices = voicesFile(), model = whisperModel(), bin = PARAKEET_BIN, onEvent = () => {} } = {}) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
+  if (active) throw new Error("a meeting is running; try again when it stops");
+  const dir = path.join(root, id);
+  const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  const was = meta.engine ?? "parakeet";
+  for (const f of ["mic.wav", "system.wav"]) if (!existsSync(path.join(dir, f))) throw new Error(`${f} is missing; cannot re-transcribe`);
+  const work = mkdtempSync(path.join(dir, ".redo-"));
+  try {
+    const m = startMeeting({
+      root: work, engine, model, voices, bin, now: new Date(meta.startedAt),
+      replay: { mic: path.join(dir, "mic.wav"), system: path.join(dir, "system.wav") },
+      onEvent: (e) => { if (e.type === "status") onEvent(e); },
+    });
+    const r = await m.done;
+    if (r.status !== "done") throw new Error(r.error ?? `re-transcription ${r.status}`);
+    const keep = (from, to) => { if (existsSync(path.join(dir, from)) && !existsSync(path.join(dir, to))) renameSync(path.join(dir, from), path.join(dir, to)); };
+    keep("transcript.jsonl", `transcript.${was}.jsonl`);
+    keep("segments.jsonl", `segments.${was}.jsonl`);
+    keep("summary.json", `summary.${was}.json`);
+    for (const f of ["transcript.jsonl", "segments.jsonl", "speakers.json", "summary.json"]) rmSync(path.join(dir, f), { force: true });
+    rmSync(path.join(dir, "speakers"), { recursive: true, force: true });
+    for (const f of ["transcript.jsonl", "segments.jsonl"]) cpSync(path.join(m.dir, f), path.join(dir, f));
+    if (existsSync(path.join(m.dir, "speakers"))) cpSync(path.join(m.dir, "speakers"), path.join(dir, "speakers"), { recursive: true });
+    if (existsSync(path.join(m.dir, "speakers.json"))) {
+      const sp = JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))
+        .map((x) => ({ ...x, clip: x.clip ? path.join(dir, path.relative(m.dir, x.clip)) : x.clip }));
+      writeFileSync(path.join(dir, "speakers.json"), JSON.stringify(sp));
+    }
+    const fresh = JSON.parse(readFileSync(path.join(m.dir, "meta.json"), "utf8"));
+    const confirmed = new Set((meta.speakers ?? []).filter((x) => x.named).map((x) => x.match?.id));
+    for (const x of fresh.speakers ?? []) if (x.match && !x.match.uncertain && confirmed.has(x.match.id)) x.named = true;
+    Object.assign(meta, { engine, speakers: fresh.speakers ?? [], diarizeError: fresh.diarizeError, retranscribedAt: new Date().toISOString() });
+    delete meta.title;
+    writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  return getMeeting(id, root);
 }
 
 // Phase 5: the notes the brain wrote for a meeting (meetings-brain.js).

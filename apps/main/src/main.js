@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers, saveSummary } from "./meeting.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers, saveSummary, retranscribeMeeting } from "./meeting.js";
 import { recentMeetingsLine, pickMeeting, meetingContextBlock, summaryPrompt, parseSummary, meetingsBriefLine } from "./meetings-brain.js";
 import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice, renameVoice, mergeVoices } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
@@ -1353,6 +1353,16 @@ app.whenReady().then(async () => {
       const summary = parseSummary(r.text);
       saveSummary(m.id, summary);
       return { ok: true, summary };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    }
+  });
+  ipcMain.handle("meeting.retranscribe", async (_e, { id, engine = "whisper" } = {}) => {
+    if (!Object.hasOwn(ENGINES, engine)) return { ok: false, reason: `unknown engine ${engine}` };
+    if (isEnrolling()) return { ok: false, reason: "a voice sample is being recorded" };
+    try {
+      const m = await retranscribeMeeting(String(id ?? ""), { engine, onEvent: (e) => win?.webContents.send("meeting.event", { ...e, redo: true }) });
+      return { ok: true, lines: m.transcript.length, speakers: m.speakers?.length ?? 0 };
     } catch (err) {
       return { ok: false, reason: String(err.message ?? err) };
     }

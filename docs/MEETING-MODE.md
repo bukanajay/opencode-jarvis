@@ -503,6 +503,16 @@ a deck **Meetings** section (Summarize / Notes, Discuss, action items with
   about the meeting is answered from the transcript without acting; "create
   a Linear issue for Pranshu's item" becomes a worker dispatch. Seen: it
   cited the [mm:ss] of the question instead of the answer once.
+- **Redo in Hindi + Hinglish** (`retranscribeMeeting`, deck button): a
+  saved meeting's own WAVs replayed through the full pipeline with Whisper;
+  the new transcript, voiceprints and speakers replace the old, which stay
+  as `transcript.<engine>.jsonl` / `summary.<engine>.json`; confirmed people
+  stay confirmed. On the first real call (8 min, 2.5 min to redo) your
+  07:15 Hinglish line came out ("Jab main thoda progress ho jaoonga to share
+  kar loonga…") and the new notes have your action item; but Whisper heard
+  the English worse ("inferPulse" → "in purpose", "tech stack" → "text
+  type", so the stack question dropped out). A per-line choice of engine
+  (keep Parakeet's English, take Whisper's Hinglish) would get both.
 - **Not done:** notes are not refreshed if you rename people later (Summarize
   again); calendar invites are not linked to meetings; no per-meeting
   retrieval beyond word overlap (fine for a meeting; across many meetings
