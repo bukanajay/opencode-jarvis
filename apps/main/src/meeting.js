@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listVoices, micVoice, SAME_VOICE, voicesFile, ME } from "./voices.js";
+import { bestVoice, listVoices, loadVoices, micVoice, OTHER_VOICE, rememberVoice, SAME_VOICE, voicesFile, ME } from "./voices.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PARAKEET_BIN = path.join(here, "../../audio-parakeet/bin/parakeet");
@@ -137,19 +137,24 @@ const cos = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 
 // Which speaker said each call-side line: the speaker whose turns overlap it
 // most; else the one its own voiceprint matches; else the nearest turn.
-// Speakers matching a known voice take its name; with two or more unknown
-// voices they become Speaker A, B, …; a single unknown stays "Them".
+// With a single voice on the call, every call-side line is theirs (short
+// replies like "Yes sir" fall outside the turns and carry no voiceprint).
+// Speakers matching a known voice take its name ("Ravi?" when it is close but
+// not sure, OTHER_VOICE..SAME_VOICE); with two or more unknown voices they
+// become Speaker A, B, …; a single unknown stays "Them".
 export function assignSpeakers(segs, { turns = [], speakers = [] }, people = []) {
   const firstTurn = (id) => turns.find((t) => t.speaker === id)?.start ?? Infinity;
   const ordered = [...speakers].sort((a, b) => firstTurn(a.id) - firstTurn(b.id));
   const named = ordered.map((sp) => {
     const best = (sp.voices ?? []).filter((v) => v.id !== ME).sort((a, b) => b.score - a.score)[0];
-    const person = best && best.score >= SAME_VOICE ? people.find((p) => p.id === best.id) : null;
-    return { ...sp, match: person ? { id: person.id, name: person.name, score: best.score } : null };
+    const person = best && best.score >= OTHER_VOICE ? people.find((p) => p.id === best.id) : null;
+    return { ...sp, match: person ? { id: person.id, name: person.name, score: best.score, uncertain: best.score < SAME_VOICE } : null };
   });
   const unknown = named.filter((sp) => !sp.match);
   for (const sp of named) {
-    sp.label = sp.match ? sp.match.name : unknown.length >= 2 ? `Speaker ${String.fromCharCode(65 + unknown.indexOf(sp))}` : speakerFor("system");
+    sp.label = sp.match
+      ? `${sp.match.name}${sp.match.uncertain ? "?" : ""}`
+      : unknown.length >= 2 ? `Speaker ${String.fromCharCode(65 + unknown.indexOf(sp))}` : speakerFor("system");
   }
   const byId = new Map(named.map((sp) => [sp.id, sp]));
   const who = new Map();
@@ -171,6 +176,7 @@ export function assignSpeakers(segs, { turns = [], speakers = [] }, people = [])
       const near = turns.map((t) => [t.speaker, Math.max(0, t.start - seg.end, seg.start - t.end)]).sort((a, b) => a[1] - b[1])[0];
       if (near && near[1] <= 3) id = near[0];
     }
+    if (!id && named.length === 1) id = named[0].id;
     if (id && byId.has(id)) who.set(seg.id, byId.get(id));
   }
   return { speakers: named, who };
@@ -201,6 +207,45 @@ export function diarizeMeeting(dir, { bin = PARAKEET_BIN, voices = voicesFile() 
     child.on("error", (err) => resolve({ error: `diarize spawn failed: ${err.message}` }));
     child.on("close", (code) => resolve(code === 0 && !error ? out : { error: error ?? `diarize exited with code ${code}` }));
   });
+}
+
+// Label call-side lines from a diarization (mutates segs), keep the speakers'
+// voiceprints in speakers.json, and return the speakers for meta.json plus
+// the lines whose label changed.
+function applyDiarization(dir, segs, d, voices) {
+  const people = voices && existsSync(voices) ? listVoices(voices) : [];
+  const { speakers, who } = assignSpeakers(segs, d, people);
+  const changed = [];
+  for (const seg of segs) {
+    const sp = who.get(seg.id);
+    if (!sp) continue;
+    seg.speakerId = sp.id;
+    if (seg.speaker !== sp.label) { seg.speaker = sp.label; changed.push(seg); }
+  }
+  writeFileSync(path.join(dir, "speakers.json"), JSON.stringify(speakers)); // with voiceprints, for naming them later
+  const metaSpeakers = speakers.map(({ print, voices: v, kind, ...sp }) => ({ ...sp, clip: sp.clip ? path.relative(dir, sp.clip) : null }));
+  return { metaSpeakers, changed };
+}
+
+// Tell the call-side speakers apart in a meeting that is already saved (one
+// recorded before this existed, or after you forgot someone). Same steps as
+// at stop; the transcript is rewritten from segments.jsonl.
+export async function identifySpeakers(id, { root = meetingsRoot(), voices = voicesFile(), bin = PARAKEET_BIN } = {}) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
+  if (active?.id === id) throw new Error("that meeting is still running");
+  const dir = path.join(root, id);
+  const d = await diarizeMeeting(dir, { bin, voices });
+  if (d.error) throw new Error(d.error);
+  const segs = [...new Map(readJsonl(path.join(dir, "segments.jsonl")).map((s) => [s.id, s])).values()];
+  const { metaSpeakers } = applyDiarization(dir, segs, d, voices);
+  const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  // People you already named here stay confirmed when the same voice comes back.
+  const confirmed = new Set((meta.speakers ?? []).filter((sp) => sp.named).map((sp) => sp.match?.id));
+  for (const sp of metaSpeakers) if (sp.match && !sp.match.uncertain && confirmed.has(sp.match.id)) sp.named = true;
+  meta.speakers = metaSpeakers;
+  writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  writeJsonl(path.join(dir, "transcript.jsonl"), segs.filter((s) => !s.echo).sort((a, b) => a.start - b.start).map(({ print, ...s }) => s));
+  return getMeeting(id, root);
 }
 
 let active = null;
@@ -240,20 +285,12 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
       const d = await diarizeMeeting(dir, { bin, voices });
       if (d.error) meta.diarizeError = d.error;
       else {
-        const people = existsSync(voices ?? "") ? listVoices(voices) : [];
-        const { speakers, who } = assignSpeakers(log.all(), d, people);
-        for (const seg of log.all()) {
-          const sp = who.get(seg.id);
-          if (!sp) continue;
-          seg.speakerId = sp.id;
-          if (seg.speaker !== sp.label) {
-            seg.speaker = sp.label;
-            const { print, ...shown } = seg;
-            if (!seg.echo) onEvent({ type: "segment", meetingId: id, segment: shown });
-          }
+        const { metaSpeakers, changed } = applyDiarization(dir, log.all(), d, voices);
+        for (const seg of changed) {
+          const { print, ...shown } = seg;
+          if (!seg.echo) onEvent({ type: "segment", meetingId: id, segment: shown });
         }
-        writeFileSync(path.join(dir, "speakers.json"), JSON.stringify(speakers)); // with voiceprints, for naming them later
-        meta.speakers = speakers.map(({ print, voices: v, kind, ...sp }) => ({ ...sp, clip: sp.clip ? path.relative(dir, sp.clip) : null }));
+        meta.speakers = metaSpeakers;
       }
     }
     meta.endedAt = new Date().toISOString();
@@ -263,7 +300,9 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
     writeFileSync(path.join(dir, "transcript.jsonl"), clean.map((s) => JSON.stringify(s)).join("\n") + (clean.length ? "\n" : ""));
     writeMeta();
     if (active === m) active = null;
-    const summary = { id, dir, status: meta.status, error: meta.error, seconds: meta.seconds, segments: log.transcript().length, speakers: meta.speakers?.length ?? 0 };
+    let toName = 0;
+    try { toName = speakersToName(getMeeting(id, root)).length; } catch {}
+    const summary = { id, dir, status: meta.status, error: meta.error, seconds: meta.seconds, segments: log.transcript().length, speakers: meta.speakers?.length ?? 0, toName };
     onEvent({ type: "stopped", ...summary });
     settle(summary);
   };
@@ -323,6 +362,78 @@ export function listMeetings(root = meetingsRoot()) {
     })
     .filter(Boolean)
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+}
+
+// Phase 4: who still needs a name after a meeting. Unknown or unsure voices
+// with a clip and enough speech to be worth asking about, each with a line
+// they said so you can tell them apart.
+const ASK_MIN_SECONDS = 3;
+export function speakersToName(meeting) {
+  return (meeting.speakers ?? [])
+    .filter((sp) => !sp.named && (!sp.match || sp.match.uncertain) && sp.clip && sp.seconds >= ASK_MIN_SECONDS)
+    .map((sp) => {
+      const lines = meeting.transcript.filter((s) => s.speakerId === sp.id).sort((a, b) => b.text.length - a.text.length);
+      return { ...sp, said: lines[0]?.text ?? "" };
+    });
+}
+
+const readJsonl = (f) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+const writeJsonl = (f, rows) => writeFileSync(f, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
+
+// Re-match one meeting's call-side speakers against the voices you know now.
+// Speakers you named keep their name; letters of the still-unknown stay put.
+// `force` names one speaker outright. Returns how many lines changed.
+function relabelMeeting(dir, people, force = null) {
+  const metaFile = path.join(dir, "meta.json"), spFile = path.join(dir, "speakers.json");
+  if (!existsSync(metaFile) || !existsSync(spFile)) return 0;
+  const meta = JSON.parse(readFileSync(metaFile, "utf8"));
+  const prints = new Map(JSON.parse(readFileSync(spFile, "utf8")).map((sp) => [sp.id, sp.print]));
+  const labels = new Map();
+  for (const sp of meta.speakers ?? []) {
+    if (force && sp.id === force.speakerId) {
+      sp.named = true;
+      sp.match = { id: force.person.id, name: force.person.name, score: 1, uncertain: false };
+      sp.label = force.person.name;
+    } else if (sp.named) {
+      const p = people.find((x) => x.id === sp.match?.id);
+      if (p) sp.label = sp.match.name = p.name; // renamed since
+    } else if (prints.get(sp.id)) {
+      const best = bestVoice(prints.get(sp.id), people);
+      if (best && best.score >= OTHER_VOICE) {
+        sp.match = { ...best, uncertain: best.score < SAME_VOICE };
+        sp.label = `${best.name}${sp.match.uncertain ? "?" : ""}`;
+      }
+    }
+    labels.set(sp.id, sp.label);
+  }
+  let changed = 0;
+  const tFile = path.join(dir, "transcript.jsonl");
+  const rows = readJsonl(tFile).map((r) => {
+    const label = r.speakerId && labels.get(r.speakerId);
+    if (!label || label === r.speaker) return r;
+    changed += 1;
+    return { ...r, speaker: label };
+  });
+  if (changed) writeJsonl(tFile, rows);
+  writeFileSync(metaFile, JSON.stringify(meta, null, 2));
+  return changed;
+}
+
+// You said who a voice was. Their call voiceprint is remembered under that
+// name (voices.js), this meeting is relabelled, and so is every other
+// meeting where the same voice is still unnamed.
+export function nameSpeaker(meetingId, speakerId, { name, personId } = {}, { root = meetingsRoot(), voices = voicesFile() } = {}) {
+  if (!/^[\w-]+$/.test(String(meetingId))) throw new Error("bad meeting id");
+  const dir = path.join(root, meetingId);
+  const sp = JSON.parse(readFileSync(path.join(dir, "speakers.json"), "utf8")).find((x) => x.id === speakerId);
+  if (!sp?.print) throw new Error(`no voiceprint for ${speakerId} in ${meetingId}`);
+  const person = rememberVoice({ name, personId, embedding: sp.print, source: `meeting:${meetingId}` }, voices);
+  const people = loadVoices(voices).people;
+  let relabelled = relabelMeeting(dir, people, { speakerId, person });
+  for (const m of listMeetings(root)) {
+    if (m.id !== meetingId) relabelled += relabelMeeting(path.join(root, m.id), people);
+  }
+  return { person, relabelled, meeting: getMeeting(meetingId, root) };
 }
 
 export function getMeeting(id, root = meetingsRoot()) {

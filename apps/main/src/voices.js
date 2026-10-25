@@ -77,6 +77,72 @@ export function setMyVoice({ embeddings, name = "You" }, file = voicesFile(), no
   return { id: ME, samples: me.embeddings.length };
 }
 
+// Phase 4: someone you named after a meeting. The speaker's call voiceprint
+// joins the person with that id, else the person with that name (so naming
+// "Ravi" twice builds one Ravi), else a new person. Samples are capped; the
+// oldest go first, so a voice that changes (new headset) keeps up.
+export function rememberVoice({ name, personId, embedding, source }, file = voicesFile(), now = new Date()) {
+  const clean = String(name ?? "").trim().replace(/\s+/g, " ");
+  if (!personId && !clean) throw new Error("rememberVoice: a name is required");
+  if (!Array.isArray(embedding) || embedding.length !== 256) throw new Error("rememberVoice: 256-dim embedding required");
+  const v = loadVoices(file);
+  let p = personId
+    ? v.people.find((x) => x.id === personId)
+    : v.people.find((x) => x.id !== ME && x.name.toLowerCase() === clean.toLowerCase());
+  if (personId && !p) throw new Error(`no voice ${personId}`);
+  if (p?.id === ME) throw new Error("that is your own voice; record it again from Settings instead");
+  if (!p) {
+    const slug = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "person";
+    let id = `p-${slug}`;
+    for (let n = 2; v.people.some((x) => x.id === id); n++) id = `p-${slug}-${n}`;
+    p = { id, name: clean, isMe: false, embeddings: [], createdAt: now.toISOString(), sources: [] };
+    v.people.push(p);
+  }
+  p.embeddings = [...p.embeddings, embedding].slice(-MAX_EMBEDDINGS);
+  p.mean = meanOf(p.embeddings);
+  p.updatedAt = now.toISOString();
+  if (source && !p.sources.includes(source)) p.sources = [...p.sources, source];
+  saveVoices(v, file);
+  return { id: p.id, name: p.name, samples: p.embeddings.length };
+}
+
+export function renameVoice(id, name, file = voicesFile()) {
+  const clean = String(name ?? "").trim().replace(/\s+/g, " ");
+  if (!clean) return { ok: false, reason: "a name is required" };
+  const v = loadVoices(file);
+  const p = v.people.find((x) => x.id === id);
+  if (!p) return { ok: false, reason: `no voice ${id}` };
+  p.name = clean;
+  saveVoices(v, file);
+  return { ok: true, id, name: clean };
+}
+
+// Two entries that are the same person: samples and sources move to `into`.
+export function mergeVoices(from, into, file = voicesFile()) {
+  if (from === into) return { ok: false, reason: "same person" };
+  const v = loadVoices(file);
+  const a = v.people.find((x) => x.id === from), b = v.people.find((x) => x.id === into);
+  if (!a || !b) return { ok: false, reason: "no such voice" };
+  if (a.id === ME || b.id === ME) return { ok: false, reason: "your own voice cannot be merged" };
+  b.embeddings = [...b.embeddings, ...a.embeddings].slice(-MAX_EMBEDDINGS);
+  b.mean = meanOf(b.embeddings);
+  b.sources = [...new Set([...(b.sources ?? []), ...(a.sources ?? [])])];
+  v.people = v.people.filter((x) => x.id !== from);
+  saveVoices(v, file);
+  return { ok: true, id: into, samples: b.embeddings.length };
+}
+
+// Best known person (not you) for a voiceprint: { id, name, score } or null.
+export function bestVoice(print, people = loadVoices().people) {
+  let best = null;
+  for (const p of people) {
+    if (p.id === ME || !p.mean) continue;
+    const score = p.mean.reduce((s, x, i) => s + x * print[i], 0);
+    if (!best || score > best.score) best = { id: p.id, name: p.name, score: Math.round(score * 100) / 100 };
+  }
+  return best;
+}
+
 // Hard delete: the vectors are gone, not hidden.
 export function forgetVoice(id, file = voicesFile()) {
   const v = loadVoices(file);

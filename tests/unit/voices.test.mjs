@@ -123,3 +123,30 @@ test("recordEnrollment: meter levels, stop, result with embeddings; test mode an
   assert.match(r3.reason, /too little speech/);
   assert.throws(() => recordEnrollment({ bin: "/nonexistent/parakeet", file }), /build:parakeet/);
 });
+
+test("rememberVoice: a name builds one person; samples capped; your own voice refused", async () => {
+  const { rememberVoice, renameVoice, mergeVoices, bestVoice } = await import("../../apps/main/src/voices.js");
+  const file = tmpFile();
+  setMyVoice({ embeddings: [vec(0)] }, file);
+  const a = rememberVoice({ name: "  Ravi  Kumar ", embedding: vec(3), source: "meeting:m1" }, file);
+  assert.deepEqual(a, { id: "p-ravi-kumar", name: "Ravi Kumar", samples: 1 });
+  const b = rememberVoice({ name: "ravi kumar", embedding: vec(3), source: "meeting:m2" }, file);
+  assert.equal(b.id, "p-ravi-kumar", "same name, same person");
+  assert.equal(b.samples, 2);
+  const p = loadVoices(file).people.find((x) => x.id === "p-ravi-kumar");
+  assert.deepEqual(p.sources, ["meeting:m1", "meeting:m2"]);
+  for (let i = 0; i < 60; i++) rememberVoice({ personId: "p-ravi-kumar", embedding: vec(3) }, file);
+  assert.equal(loadVoices(file).people.find((x) => x.id === "p-ravi-kumar").embeddings.length, 50);
+  assert.throws(() => rememberVoice({ personId: "me", embedding: vec(0) }, file), /your own voice/);
+  assert.throws(() => rememberVoice({ name: "", embedding: vec(0) }, file), /name is required/);
+
+  assert.equal(bestVoice(vec(3), loadVoices(file).people).id, "p-ravi-kumar");
+  assert.equal(bestVoice(vec(0), loadVoices(file).people).id, "p-ravi-kumar", "never you, even when it is your voice");
+
+  const dup = rememberVoice({ name: "R. Kumar", embedding: vec(4) }, file);
+  assert.deepEqual(mergeVoices(dup.id, "p-ravi-kumar", file), { ok: true, id: "p-ravi-kumar", samples: 50 });
+  assert.equal(loadVoices(file).people.some((x) => x.id === dup.id), false);
+  assert.equal(mergeVoices("me", "p-ravi-kumar", file).ok, false);
+  assert.deepEqual(renameVoice("p-ravi-kumar", "Ravi", file), { ok: true, id: "p-ravi-kumar", name: "Ravi" });
+  assert.equal(renameVoice("p-ravi-kumar", "  ", file).ok, false);
+});

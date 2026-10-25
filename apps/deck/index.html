@@ -278,6 +278,16 @@
   #mt-lines .who { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-right: 6px; }
   #mt-lines .you .who { color: var(--accent); }
   #mt-lines .partial { opacity: 0.55; }
+  #meeting.names { display: block; }
+  #mt-names { display: none; gap: 10px; }
+  #meeting.names #mt-names { display: grid; }
+  #meeting.names #mt-setup { display: none; }
+  #mt-names h3 { margin: 0; font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); font-weight: normal; }
+  .mt-who { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
+  .mt-who .said { grid-column: 2; font-size: 12.5px; color: var(--dim); font-style: italic; }
+  .mt-who .row { grid-column: 1 / -1; }
+  .people-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  .people-row input { flex: 1; }
   @keyframes micbreathe { 0%, 100% { box-shadow: 0 0 10px rgba(200, 240, 74, 0.3); } 50% { box-shadow: 0 0 26px rgba(200, 240, 74, 0.6); } }
   #mic { min-width: 76px; }
   /* Voice focus: voice mode hides the transcript so the ring and Jarvis take
@@ -369,6 +379,12 @@
         </div>
         <div class="mt-head"><span class="rec"></span><span id="mt-status">recording</span><span id="mt-clock"></span><button type="button" class="ghost" id="mt-stop">Stop</button></div>
         <div id="mt-lines"></div>
+        <div id="mt-names">
+          <h3>Who was on this call?</h3>
+          <div id="mt-names-list"></div>
+          <p class="row"><button type="button" class="ghost" id="mt-names-done">Done</button><span class="res">Names stay on this Mac; Jarvis will know these voices next time.</span></p>
+          <datalist id="mt-people"></datalist>
+        </div>
       </div>
       <div id="log" aria-live="polite"></div>
       <div id="working" aria-hidden="true"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></div>
@@ -479,6 +495,9 @@
       <p class="row"><span class="res" id="vp-clock">0 s</span><button type="button" id="vp-done">Done</button></p>
     </div>
     <div class="res" id="vp-note"></div>
+    <p class="row"><button class="ghost" id="people-name" type="button">Name voices from recent meetings</button><span class="res" id="people-note"></span></p>
+    <p class="res" id="people-head" hidden>People Jarvis knows by voice:</p>
+    <div id="people-list"></div>
     </div>
   </details>
   <details id="slack-settings" open>
@@ -1399,10 +1418,67 @@
       paintMeeting("");
       for (const p of mtPartial.values()) p.remove();
       mtPartial.clear();
+      if (ev.toName > 0 && ev.status !== "failed") askNames(ev.id);
       if (ev.status === "failed") addSys(`Meeting stopped: ${ev.error}`, { bad: true });
       else addSys(`Meeting saved: ${ev.segments} line${ev.segments === 1 ? "" : "s"}, ${Math.round(ev.seconds ?? 0)} s${ev.speakers > 1 ? `, ${ev.speakers} voices on the call` : ""} · ${ev.dir}`);
     }
   });
+  // Phase 4: name the voices Jarvis did not know. Each gets its clip, a line
+  // it said, and a name box; saving remembers the voice for next time and
+  // relabels this meeting (and older ones with the same voice).
+  async function askNames(meetingId) {
+    const r = await window.jarvis.meetingSpeakers(meetingId).catch(() => null);
+    if (!r?.toName?.length) return;
+    $("mt-people").innerHTML = "";
+    for (const p of r.people) $("mt-people").append(new Option(p.name));
+    const list = $("mt-names-list");
+    list.innerHTML = "";
+    for (const sp of r.toName) {
+      const box = document.createElement("div");
+      box.className = "mt-who";
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "ghost";
+      play.textContent = "▶";
+      play.title = `Play ${sp.label}`;
+      play.onclick = async () => {
+        try { new Audio(await window.jarvis.meetingClip(meetingId, sp.id)).play(); } catch {}
+      };
+      const who = document.createElement("strong");
+      who.textContent = `${sp.label} · ${Math.round(sp.seconds)} s`;
+      const said = document.createElement("div");
+      said.className = "said";
+      said.textContent = sp.said ? `“${sp.said.slice(0, 140)}”` : "";
+      const row = document.createElement("p");
+      row.className = "row";
+      const input = document.createElement("input");
+      input.placeholder = "Their name";
+      input.setAttribute("list", "mt-people");
+      if (sp.match?.uncertain) input.value = sp.match.name;
+      const save = document.createElement("button");
+      save.type = "button";
+      save.textContent = sp.match?.uncertain ? "Yes, that's them" : "Save";
+      input.oninput = () => { save.textContent = sp.match?.uncertain && input.value === sp.match.name ? "Yes, that's them" : "Save"; };
+      const note = document.createElement("span");
+      note.className = "res";
+      save.onclick = async () => {
+        const name = input.value.trim();
+        if (!name) { note.textContent = "type a name first"; return; }
+        save.disabled = true;
+        const res = await window.jarvis.meetingNameSpeaker(meetingId, sp.id, name);
+        if (!res.ok) { save.disabled = false; note.textContent = res.reason; return; }
+        note.textContent = `saved${res.relabelled ? ` · ${res.relabelled} line${res.relabelled === 1 ? "" : "s"} relabelled` : ""}`;
+        input.disabled = true;
+        paintPeople();
+      };
+      row.append(input, save, note);
+      box.append(play, who, said, row);
+      list.append(box);
+    }
+    paintMeeting("names");
+  }
+  $("mt-names-done").onclick = () => paintMeeting("");
+
   $("meet").onclick = async () => {
     if ($("meet").classList.contains("on")) { $("mt-stop").click(); return; }
     paintMeeting($("meeting").classList.contains("setup") ? "" : "setup");
@@ -2024,6 +2100,40 @@
     paintVoicePrint();
   };
   paintVoicePrint().catch(() => {});
+
+  // People named after meetings: rename (inline) or forget (deletes their voiceprint).
+  async function paintPeople() {
+    const people = (await window.jarvis.voicesList().catch(() => [])).filter((p) => !p.isMe);
+    $("people-head").hidden = !people.length;
+    const list = $("people-list");
+    list.innerHTML = "";
+    for (const p of people) {
+      const row = document.createElement("div");
+      row.className = "people-row";
+      const input = document.createElement("input");
+      input.value = p.name;
+      input.title = `${p.samples} voice sample${p.samples === 1 ? "" : "s"} from ${p.sources.length} meeting${p.sources.length === 1 ? "" : "s"}`;
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.className = "ghost";
+      rename.textContent = "Rename";
+      rename.onclick = async () => { await window.jarvis.voicesRename(p.id, input.value); paintPeople(); };
+      const forget = document.createElement("button");
+      forget.type = "button";
+      forget.className = "ghost";
+      forget.textContent = "Forget";
+      forget.onclick = async () => { await window.jarvis.voicesForget(p.id); paintPeople(); };
+      row.append(input, rename, forget);
+      list.append(row);
+    }
+  }
+  paintPeople().catch(() => {});
+  $("people-name").onclick = async () => {
+    $("people-note").textContent = "looking…";
+    const r = await window.jarvis.meetingNextToName();
+    $("people-note").textContent = r.ok ? `from ${new Date(r.startedAt).toLocaleString()}, in the meeting panel` : r.reason;
+    if (r.ok) askNames(r.id);
+  };
   window.jarvis?.settingsGet?.().then((s) => {
     paintProfile(s.settings);
     if (s.settings?.onboarded !== "on") openOnboarding();
