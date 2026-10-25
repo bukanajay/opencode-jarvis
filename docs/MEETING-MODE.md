@@ -184,6 +184,120 @@ clear "recording" indicator.
 Done when: a real 10-min Zoom call gives a transcript with correct
 You/Them labels and both WAVs on disk.
 
+### Phase 1 status (2026-10-25)
+
+Built: `parakeet --meeting` (`src/meeting.swift`; `helper.swift` became
+`main.swift` so the target can have two files), `apps/main/src/meeting.js`,
+IPC `meeting.start|stop|state|list|get` + `meeting.event`, deck Meeting
+button and live panel, `tests/unit/meeting.test.mjs`,
+`npm run prove:meeting` (real model, You/Them/You, echo at −30 and −12 dB).
+
+What changed from the plan:
+
+- **Permission, solved for every launcher.** Live meeting mode re-execs
+  itself with `responsibility_spawnattrs_setdisclaim`, and the binary
+  carries its own `Info.plist` (`apps/audio-parakeet/Info.plist`, linked into
+  `__TEXT,__info_plist`, signed `-i dev.jarvis.parakeet`). macOS then asks
+  for System Audio Recording and Microphone *for parakeet*, whether Jarvis
+  runs from a terminal, the LaunchAgent or a packaged app. Verified from a
+  plain shell (which got silent zeros in Phase 0).
+- **Parakeet fails on hot audio.** Tapped call audio peaks near 0 dBFS; for
+  whole utterances Parakeet then returned an empty string or different
+  words, depending on exactly where the clip was cut (10/10 failing clips
+  fixed by −12 dB). `padded()` now scales any clip that peaks above −10 dBFS
+  to a −10 dBFS peak (all modes; mic speech is quieter and passes untouched).
+- **Echo handling (Phase 0 finding 9), first cut in Main:** text dedupe
+  (≥60% of a mic segment's words said on the system stream within ±1.5 s)
+  and a level rule (call playing ≥60% of the segment, mic ≥25 dB quieter,
+  not on headphones/bluetooth). Live on built-in speakers at ~50% the echo
+  reached the mic only ~9 dB below the call and transcribed verbatim, so the
+  level rule alone would miss it; the text rule caught it. Echo segments
+  stay in `segments.jsonl` (flagged) and drop out of `transcript.jsonl`.
+  Real AEC is still open (only needed if your own speech gets lost when you
+  talk over someone, the text rule can't separate that).
+- **The system stream's VAD never fired live.** A process tap hands over
+  ~10 ms per callback, less than one 20 ms VAD frame, and the VAD only
+  looked at whole frames inside each chunk, so the call side produced no
+  segments at all (replay fed 100 ms chunks and hid it). The VAD now walks
+  the listener's buffer across chunk boundaries (one-shot mode was also
+  skipping ~6% of mic frames this way), and replay feeds the system track in
+  10 ms pieces so `prove:meeting` covers it.
+- **Grants survive rebuilds.** The default ad-hoc designated requirement is
+  the code hash, so every rebuild lost the Microphone grant (and a grant
+  switched on in Settings for an older build reads as *denied*). Signed with
+  `-r='designated => identifier "dev.jarvis.parakeet"'`.
+- **Live, verified (built-in speakers ~50%, global tap, nobody talking):**
+  `Them` gets the call's sentence, the mic's verbatim echo copy (60 ms later,
+  ~10 dB below the call) is hidden by the text rule, transcript has one line.
+  Mic trails system by 28–46 ms across runs: the shared clock holds.
+- **"All system audio" hears everything playing on the Mac.** Another app's
+  audio running straight into the call's speech became one utterance that
+  Parakeet garbled (each half alone transcribes fine). The deck defaults to
+  All (works with any call app) and remembers the last pick; tapping the
+  call app is the cleaner choice.
+- **Not yet handled:** short noise after speech sometimes becomes one or two
+  invented foreign words ("jedinę", "Ich gehe"). Candidates: drop segments
+  under ~1 s with a low voiced share, or a language hint once FluidAudio
+  exposes one.
+- **First real call (2026-10-25, 8 min, Teams-style call, all system
+  audio, built-in speakers, two people).** 34 segments; speaker labels
+  right throughout; the other person's long answers transcribed cleanly;
+  3 verbatim echo copies of their sentences hidden, none of yours. Found:
+  - Stop in the deck was swallowed: Electron windows ignore the first click
+    while another app (the call) is focused. Deck now `acceptFirstMouse`.
+  - A one-word echo ("Who") slipped through (text rule needs ≥2 words).
+    One-word segments now count as echo when the call said the same word
+    within 0.5 s.
+  - **Hindi / Hinglish is not transcribed.** Parakeet TDT v3 covers 25
+    European languages; your code-switched lines came out as nonsense
+    ("test curvath", "share karma"), and short unclear audio sometimes
+    came back as Spanish/Russian ("Y lo que sí", "Ну"). English is solid.
+    Fixed by the Whisper engine below.
+  - Backchannels ("Mm-hmm", "Okay") from the other side while you talk are
+    real and kept; transcript is ordered by start time, so they sit after
+    your long turn begins.
+- Not yet verified:
+  tapping a single app (`--app`) whose helper process appears mid-call (the
+  retarget path), and a 60-minute run
+  (memory stays flat by design: listeners trim to the current utterance,
+  WAVs stream to disk).
+
+### Hindi + Hinglish engine (2026-10-25)
+
+Per meeting, the deck offers **English** (Parakeet, default, fastest) or
+**Hindi + Hinglish** (Whisper). Capture, VAD, echo handling and storage are
+shared; only the transcriber differs (`src/whisper.swift`).
+
+- **Model:** Oriserve Whisper-Hindi2Hinglish-Apex (Apache 2.0, large-v3-turbo
+  fine-tuned on ~700 h of noisy Indian-accented Hindi; self-reported WER on
+  Hindi ~40% lower than Whisper large-v3). Writes Hindi as **romanized
+  Hinglish**, keeps English as English. GGML q8_0 (874 MB) from
+  `Marquestra/Whisper-Hindi2Hinglish-Apex-GGML`, SHA-256 pinned:
+  `npm run fetch:whisper-model` → `~/.config/jarvis/models/`.
+- **Runtime:** whisper.cpp v1.9.5, static libs with Metal, linked into
+  parakeet by `build-parakeet.sh` when cmake is available (otherwise the
+  engine reports itself unavailable). Language token `hi`, greedy, no
+  context between utterances, segments with no-speech probability > 0.6 or
+  the literal `nan` dropped. Partials every 2.5 s.
+- **Why not alternatives:** FluidAudio has no Indian-language ASR; plain
+  Whisper turbo writes Hindi in Devanagari and is weak on code-switching;
+  WhisperKit needs SwiftPM, which is broken on this machine.
+- **On your real call (8 min, replayed):** your Hinglish is readable
+  throughout ("Actually main kya kar raha hoon na… ek agent banaaya hai jo
+  voice hamse baat kar paega…"); the other side's "Mm-hmm" / "Y lo que sí"
+  became "Thik hai", "Ji ji", "Ok sir"; 41 s of audio transcribes in ~1.1 s
+  warm. English is a little worse than Parakeet ("steps" for "specs",
+  "section 2" for "too"), hence the per-meeting choice.
+- **Fixed on the way:** ggml-metal asserts at `exit()` while a context holds
+  buffers (meeting saved as *failed*): the context is freed after the last
+  utterance. And meeting commits no longer block the VAD: whatever was said
+  while an utterance was being transcribed (Whisper's first pass takes
+  >1 s) was being dropped; the clip is now handed over and listening goes on
+  at once. `prove:meeting` has a Hindi case (macOS voice Lekha) that caught it.
+- **Open:** noise before a call can still come back as a one-word Devanagari
+  line ("जाज"); an echo whose call-side copy Whisper mis-hears can slip past
+  the text rule.
+
 ## Phase 2 — voice enrollment (your profile)
 
 **Helper: `parakeet --enroll <out.json>`** (and `--embed <wav>` for tests).

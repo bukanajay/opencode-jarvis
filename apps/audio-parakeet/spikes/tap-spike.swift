@@ -259,7 +259,27 @@ func analyze(system: [Float], mic: [Float]) -> [String: Any] {
 
 // MARK: commands
 
-let args = Array(CommandLine.arguments.dropFirst())
+// --disclaim: re-exec self with responsibility disclaimed, so TCC judges this
+// binary (its embedded Info.plist + signature) instead of whoever spawned it.
+typealias DisclaimFn = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+if CommandLine.arguments.contains("--disclaim"), ProcessInfo.processInfo.environment["TAP_SPIKE_DISCLAIMED"] == nil {
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_spawnattrs_setdisclaim") else { die("no disclaim symbol") }
+    let disclaim = unsafeBitCast(sym, to: DisclaimFn.self)
+    var attr: posix_spawnattr_t?
+    posix_spawnattr_init(&attr)
+    _ = disclaim(&attr, 1)
+    setenv("TAP_SPIKE_DISCLAIMED", "1", 1)
+    let argv = CommandLine.arguments.filter { $0 != "--disclaim" }
+    var cargs = argv.map { strdup($0) } + [nil]
+    var pid: pid_t = 0
+    let st = posix_spawn(&pid, CommandLine.arguments[0], nil, &attr, &cargs, environ)
+    if st != 0 { die("posix_spawn failed: \(st)") }
+    var status: Int32 = 0
+    waitpid(pid, &status, 0)
+    exit((status >> 8) & 0xff)
+}
+
+let args = Array(CommandLine.arguments.dropFirst()).filter { $0 != "--disclaim" }
 func opt(_ name: String) -> String? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
     return args[i + 1]

@@ -1,5 +1,9 @@
 //swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+// Embedded Info.plist (usage strings for meeting mode, see meeting.swift).
+let plist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Info.plist").path
 
 // Apple Silicon build: npm run build:parakeet (wraps swift build -c release and
 // falls back to plain swiftc when SwiftPM is unusable). Intel Macs cannot run
@@ -16,7 +20,8 @@ let package = Package(
             dependencies: ["FluidAudio"],
             path: "src",
             exclude: ["sim.swift"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", plist])]
         ),
     ]
 )

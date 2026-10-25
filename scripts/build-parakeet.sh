@@ -35,6 +35,33 @@ if [[ -z "${SDKROOT:-}" ]]; then
   fi
 fi
 
+# Whisper (meeting mode, Hindi + Hinglish; src/whisper.swift): whisper.cpp
+# static libs with Metal. Needs cmake (brew install cmake, or pip install
+# cmake); without it parakeet builds without the Whisper engine.
+WH_TAG="${WHISPER_TAG:-v1.9.5}"
+WH="$WORK/whisper.cpp-$WH_TAG"
+WB="$WH/build"
+WHISPER=()
+if command -v cmake >/dev/null; then
+  mkdir -p "$WORK"
+  [[ -d "$WH" ]] || git clone -q --depth 1 --branch "$WH_TAG" https://github.com/ggml-org/whisper.cpp "$WH" 2>/dev/null
+  if [[ ! -f "$WB/src/libwhisper.a" ]]; then
+    cmake -S "$WH" -B "$WB" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+      -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 >/dev/null
+    cmake --build "$WB" -j 8 --config Release >/dev/null
+  fi
+  mkdir -p "$WORK/whisper-module"
+  printf 'module Whisper {\n  header "%s/include/whisper.h"\n  link "c++"\n  export *\n}\n' "$WH" > "$WORK/whisper-module/module.modulemap"
+  WHISPER=(-Xcc -fmodule-map-file="$WORK/whisper-module/module.modulemap" -Xcc -I"$WH/ggml/include"
+    "$WB/src/libwhisper.a" "$WB/ggml/src/libggml.a" "$WB/ggml/src/libggml-base.a" "$WB/ggml/src/libggml-cpu.a"
+    "$WB/ggml/src/ggml-metal/libggml-metal.a" "$WB/ggml/src/ggml-blas/libggml-blas.a"
+    -framework Metal -framework MetalKit -framework Accelerate)
+  echo "parakeet: whisper.cpp $WH_TAG ready (Hindi + Hinglish engine)" >&2
+  PARAKEET_MANUAL=1 # SwiftPM cannot link it; the swiftc path below does
+else
+  echo "parakeet: no cmake, building without the Whisper engine (Hindi + Hinglish)" >&2
+fi
+
 VOICE="$ROOT/apps/audio-voice"
 VBIN="$VOICE/bin/jarvis-voice"
 mkdir -p "$VOICE/bin"
@@ -42,6 +69,7 @@ mkdir -p "$VOICE/bin"
 SPM_OK=0
 if [[ "${PARAKEET_MANUAL:-0}" != "1" ]] && (cd "$PKG" && swift build -c release) ; then
   cp "$PKG/.build/release/parakeet" "$BIN"
+  codesign --force -s - -i dev.jarvis.parakeet -r="designated => identifier \"dev.jarvis.parakeet\"" "$BIN"
   echo "parakeet: built with SwiftPM -> $BIN"
   SPM_OK=1
 else
@@ -78,12 +106,19 @@ if [[ ! -f "$OUT/libFluidAudio.a" ]]; then
     "${FILES[@]}"
 fi
 
+# Meeting mode disclaims responsibility, so macOS reads the usage strings from
+# the binary itself: embed Info.plist and sign with its bundle id. The explicit
+# designated requirement keeps the Microphone / System Audio grants across
+# rebuilds (an ad-hoc default is the code hash, which every build changes).
+PLIST=(-Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PKG/Info.plist")
+
 MAPS=(-Xcc -fmodule-map-file="$S/FastClusterWrapper/include/module.modulemap" -Xcc -fmodule-map-file="$OUT/mts/module.modulemap")
 
 if [[ "$SPM_OK" != "1" ]]; then
   swiftc -O -swift-version 5 -suppress-warnings -target "$TARGET" -I "$OUT" "${MAPS[@]}" \
-    "$PKG/src/helper.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
-    -lc++ -o "$BIN"
+    "$PKG/src/main.swift" "$PKG/src/meeting.swift" "$PKG/src/whisper.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
+    ${WHISPER[@]+"${WHISPER[@]}"} -lc++ "${PLIST[@]}" -o "$BIN"
+  codesign --force -s - -i dev.jarvis.parakeet -r="designated => identifier \"dev.jarvis.parakeet\"" "$BIN"
   echo "parakeet: built with swiftc (FluidAudio $FA_TAG) -> $BIN"
 fi
 

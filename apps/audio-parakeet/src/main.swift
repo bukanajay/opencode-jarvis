@@ -12,6 +12,8 @@
 //   --stdin: each line a partial, blank line commits the final (no mic, no model)
 //   --file path: transcribe an audio file with the real model, emit one final
 //   --prepare: download + compile the models, emit status ready, exit
+//   --meeting DIR: long-running two-stream capture (mic + system audio tap),
+//                  timestamped segments, WAVs in DIR (see meeting.swift)
 import Foundation
 import AVFoundation
 import FluidAudio
@@ -22,6 +24,12 @@ func emit(_ obj: [String: Any]) {
         print(line)
         fflush(stdout)
     }
+}
+
+// PK_DEBUG=1: extra {"kind":"debug"} lines (Main ignores unknown kinds).
+let debugOn = ProcessInfo.processInfo.environment["PK_DEBUG"] != nil
+func debug(_ obj: [String: Any]) {
+    if debugOn { emit(obj.merging(["kind": "debug"]) { a, _ in a }) }
 }
 
 func fail(_ state: String, _ note: String, code: Int32) -> Never {
@@ -77,9 +85,14 @@ func loadASR() async throws -> AsrManager {
     return asr
 }
 
-// Parakeet rejects < 1 s of audio; pad short clips with silence.
+// Parakeet rejects < 1 s of audio; pad short clips with silence. Near
+// full-scale input (tapped call audio peaks at -0.1 dBFS) makes it return
+// nothing or the wrong words for whole utterances, so hot clips are scaled to
+// a -10 dBFS peak first; mic speech is quieter and passes untouched.
 func padded(_ s: [Float]) -> [Float] {
-    s.count >= sampleRate ? s : s + [Float](repeating: 0, count: sampleRate - s.count)
+    let peak = s.reduce(Float(0)) { max($0, abs($1)) }
+    let x = peak > 0.316 ? s.map { $0 * (0.316 / peak) } : s
+    return x.count >= sampleRate ? x : x + [Float](repeating: 0, count: sampleRate - x.count)
 }
 
 func clean(_ text: String) -> String {
@@ -123,13 +136,55 @@ let partialEvery = envNumber("JARVIS_PARAKEET_PARTIAL_MS", 700) / 1000    // par
 let minSpeech = envNumber("JARVIS_PARAKEET_MIN_SPEECH_MS", 250) / 1000    // voiced time before it counts as speech
 let floorRMS = Float(envNumber("JARVIS_PARAKEET_MIN_RMS", 0.008))         // absolute speech threshold floor
 
+// One model, two streams: AsrManager keeps separate decoder state per
+// source but is not safe to call concurrently, so calls queue up here.
+// The same queue fronts Whisper (meeting mode, Hindi/Hinglish; whisper.swift).
+final class Transcriber: @unchecked Sendable {
+    private let run: ([Float], AudioSource) async -> String
+    var shutdown: () -> Void = {}    // before exit: Whisper must release its Metal buffers
+    private let lock = NSLock()
+    private var tail: Task<Void, Never>?
+    init(_ asr: AsrManager) {
+        run = { samples, source in clean((try? await asr.transcribe(padded(samples), source: source))?.text ?? "") }
+    }
+    init(run: @escaping ([Float], AudioSource) async -> String) { self.run = run }
+
+    func text(_ samples: [Float], _ source: AudioSource) async -> String {
+        lock.lock()
+        let prev = tail
+        let job = Task { () -> String in
+            _ = await prev?.value
+            return await self.run(samples, source)
+        }
+        tail = Task { _ = await job.value }
+        lock.unlock()
+        return await job.value
+    }
+}
+
+// What a committed utterance hands back in meeting mode (seconds since start).
+struct Committed {
+    let id: String
+    let text: String
+    let start: Double
+    let end: Double
+}
+
 // All mutable state lives on one serial queue; the tap and model tasks hop onto it.
+// One-shot (default): the first final is emitted and the process exits.
+// Meeting (onCommit set): every utterance goes to onCommit and listening goes
+// on; audio before the current utterance is trimmed so hours stay small.
 final class Listener: @unchecked Sendable {
-    let q = DispatchQueue(label: "jarvis.parakeet")
-    let id = UUID().uuidString
-    var asr: AsrManager?
-    var audio: [Float] = []          // 16 kHz mono since mic start
-    var speechStart: Int? = nil      // sample index where the utterance began (with pre-roll)
+    let q: DispatchQueue
+    let source: AudioSource
+    let stream: String?              // "mic" | "system" in meeting mode, nil one-shot
+    var onCommit: ((Committed) -> Void)?
+    var id = UUID().uuidString
+    var asr: Transcriber?
+    var audio: [Float] = []          // 16 kHz mono since mic start (since `offset` when trimmed)
+    var offset = 0                   // samples trimmed off the front of `audio`
+    var vadAt = 0                    // stream sample index of the next frame the VAD has not seen
+    var speechStart: Int? = nil      // index into `audio` where the utterance began (with pre-roll)
     var voiced: Double = 0           // seconds of voiced frames in this utterance
     var lastVoice: Double = 0        // seconds (stream time) of the last voiced frame
     var noise: Float = 0.004         // adaptive noise floor (RMS)
@@ -137,25 +192,38 @@ final class Listener: @unchecked Sendable {
     var revision = 0
     var lastText = ""
     var busy = false
-    var committing = false
+    var committing = false           // one-shot only: the final is on its way
+    var inFlight = 0                 // meeting: utterances handed over, not transcribed yet
 
-    var now: Double { Double(audio.count) / Double(sampleRate) }
+    init(q: DispatchQueue = DispatchQueue(label: "jarvis.parakeet"), source: AudioSource = .microphone, stream: String? = nil) {
+        self.q = q
+        self.source = source
+        self.stream = stream
+    }
+
+    var now: Double { Double(offset + audio.count) / Double(sampleRate) }
 
     // Called on q with freshly converted samples.
     func feed(_ samples: [Float]) {
         let frame = sampleRate / 50 // 20 ms
-        var i = 0
-        let base = audio.count
+        if onCommit != nil, speechStart == nil, audio.count > sampleRate * 2 {
+            let drop = min(audio.count - sampleRate, vadAt - offset) // keep 1 s for pre-roll
+            audio.removeFirst(drop)
+            offset += drop
+        }
         audio.append(contentsOf: samples)
-        while i + frame <= samples.count {
+        // Frames span chunk boundaries: a system tap hands over ~10 ms at a
+        // time, less than one frame, so the VAD walks `audio`, not the chunk.
+        while vadAt + frame <= offset + audio.count {
+            let i = vadAt - offset
             var sum: Float = 0
-            for k in i..<(i + frame) { sum += samples[k] * samples[k] }
+            for k in i..<(i + frame) { sum += audio[k] * audio[k] }
             let rms = (sum / Float(frame)).squareRoot()
             let threshold = max(floorRMS, noise * 3)
-            let t = Double(base + i) / Double(sampleRate)
+            let t = Double(vadAt) / Double(sampleRate)
             if rms > threshold {
                 if speechStart == nil {
-                    speechStart = max(0, base + i - sampleRate * 3 / 10) // 300 ms pre-roll
+                    speechStart = max(0, i - sampleRate * 3 / 10) // 300 ms pre-roll
                     voiced = 0
                 }
                 voiced += 0.02
@@ -164,7 +232,7 @@ final class Listener: @unchecked Sendable {
                 // Track the floor only on non-speech frames, quickly down, slowly up.
                 noise = rms < noise ? noise * 0.9 + rms * 0.1 : noise * 0.995 + rms * 0.005
             }
-            i += frame
+            vadAt += frame
         }
         tick()
     }
@@ -173,14 +241,15 @@ final class Listener: @unchecked Sendable {
         guard let start = speechStart, !committing else { return }
         // A blip that never reached minSpeech and went quiet: forget it.
         if voiced < minSpeech && now - lastVoice > silenceCommit {
+            debug(["stream": stream ?? "-", "blip": now])
             speechStart = nil
             return
         }
         guard voiced >= minSpeech else { return }
-        let length = now - Double(start) / Double(sampleRate)
+        let length = now - Double(offset + start) / Double(sampleRate)
         if now - lastVoice >= silenceCommit || length >= maxUtterance {
             commit()
-        } else if now - lastPartialAt >= partialEvery {
+        } else if now - lastPartialAt >= (stream == nil ? partialEvery : meetingPartialEvery) {
             partial()
         }
     }
@@ -194,39 +263,87 @@ final class Listener: @unchecked Sendable {
         guard let asr, !busy else { return }
         busy = true
         lastPartialAt = now
-        let samples = padded(clip())
+        let samples = clip()
+        let source = self.source
+        let id = self.id
         Task {
-            let text = clean((try? await asr.transcribe(samples, source: .microphone))?.text ?? "")
+            let text = await asr.text(samples, source)
             self.q.async {
                 self.busy = false
-                guard !self.committing, !text.isEmpty, text != self.lastText else { return }
+                // Meeting mode moves on to a new utterance (new id) without waiting.
+                guard !self.committing, id == self.id, !text.isEmpty, text != self.lastText else { return }
                 self.lastText = text
                 self.revision += 1
-                emit(["kind": "partial", "id": self.id, "text": text, "revision": self.revision])
+                var msg: [String: Any] = ["kind": "partial", "id": self.id, "text": text, "revision": self.revision]
+                if let s = self.stream { msg["stream"] = s }
+                emit(msg)
             }
         }
     }
 
-    func commit() {
-        guard let asr else { return } // models still loading; retried on the next tick after load
+    // done fires on q once this utterance is settled (meeting stop waits on it).
+    func commit(done: (() -> Void)? = nil) {
+        guard let asr, let start = speechStart else { done?(); return } // models still loading: retried on the next tick
+        debug(["stream": stream ?? "-", "commit": Double(offset + start) / Double(sampleRate), "end": now, "voiced": voiced])
+        let samples = clip()
+        let startSec = Double(offset + start) / Double(sampleRate)
+        let endSec = min(now, lastVoice + 0.1) // not the trailing silence that ended it
+        let source = self.source
+        if let onCommit {
+            // Meeting: hand the clip over and listen on at once. Whatever is
+            // said while it is transcribed (Whisper's first pass takes over a
+            // second) starts the next utterance instead of being dropped.
+            let id = self.id
+            self.id = UUID().uuidString
+            speechStart = nil
+            voiced = 0
+            lastText = ""
+            revision = 0
+            inFlight += 1
+            Task {
+                let text = await asr.text(samples, source)
+                self.q.async {
+                    debug(["stream": self.stream ?? "-", "result": text])
+                    self.inFlight -= 1
+                    // Empty: noise, a cough, a door.
+                    if !text.isEmpty { onCommit(Committed(id: id, text: text, start: startSec, end: endSec)) }
+                    done?()
+                }
+            }
+            return
+        }
         committing = true
-        let samples = padded(clip())
         Task {
-            let text = clean((try? await asr.transcribe(samples, source: .microphone))?.text ?? "")
+            let text = await asr.text(samples, source)
             self.q.async {
+                let id = self.id
+                debug(["stream": self.stream ?? "-", "result": text])
+                self.committing = false
+                self.speechStart = nil
+                self.lastText = ""
                 if text.isEmpty {
                     // Noise, a cough, a door: keep listening instead of committing nothing.
-                    self.committing = false
-                    self.speechStart = nil
-                    self.lastText = ""
+                    done?()
                     return
                 }
-                emit(["kind": "final", "id": self.id, "text": text])
+                emit(["kind": "final", "id": id, "text": text])
                 exit(0)
             }
         }
     }
+
+    // Meeting stop: commit whatever is being said right now, then wait for
+    // every utterance still being transcribed.
+    func flush(done: @escaping () -> Void) {
+        if speechStart != nil, voiced >= minSpeech { commit() }
+        func settle() {
+            if inFlight > 0 { q.asyncAfter(deadline: .now() + 0.1) { settle() } } else { done() }
+        }
+        settle()
+    }
 }
+
+if args.contains("--meeting") { runMeeting() }
 
 let listener = Listener()
 
@@ -241,7 +358,7 @@ if let idx = args.firstIndex(of: "--replay"), idx + 1 < args.count {
         do {
             let asr = try await loadASR()
             listener.q.async {
-                listener.asr = asr
+                listener.asr = Transcriber(asr)
                 emit(["kind": "status", "state": "listening", "note": engineNote + " (replay)"])
             }
             let chunk = sampleRate / 10
@@ -316,7 +433,7 @@ Task {
     do {
         let asr = try await loadASR()
         listener.q.async {
-            listener.asr = asr
+            listener.asr = Transcriber(asr)
             emit(["kind": "status", "state": "listening", "note": engineNote])
             listener.tick()
         }
