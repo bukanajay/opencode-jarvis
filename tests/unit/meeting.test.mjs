@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, isMeetingActive, listMeetings, meetingId, speakerFor,
+  chooseLine, hindiShare, assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, retranscribeMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -91,6 +91,10 @@ if (process.argv.includes("--diarize")) {
 const dir = process.argv[process.argv.indexOf("--meeting") + 1];
 require("node:fs").writeFileSync(dir + "/args.json", JSON.stringify(process.argv.slice(2)));
 for (const l of lines) console.log(JSON.stringify(l));
+if (process.argv.includes("--replay-mic")) { // a replay ends by itself
+  console.log(JSON.stringify({ kind: "status", state: "stopped", note: dir, seconds: 18.5 }));
+  process.exit(0);
+}
 process.stdin.on("data", (d) => {
   if (String(d).includes("stop")) {
     console.log(JSON.stringify({ kind: "status", state: "stopped", note: dir, seconds: 18.5 }));
@@ -220,6 +224,44 @@ test("assignSpeakers: one voice on the call owns every call-side line, even far 
   assert.deepEqual([...who].map(([k, v]) => `${k}:${v.id}`), ["far:S1"]);
 });
 
+test("chooseLine: the real call's lines, English from Parakeet, Hinglish from Whisper", () => {
+  const pick = (parakeet, whisper) => { const r = chooseLine({ parakeet, whisper }); return [r.engine, r.text]; };
+  // English: Parakeet hears it better.
+  assert.deepEqual(pick("Uh so right now uh I followed the specs and added the documentations only", "Sir right now I followed the steps and added the documentation only"),
+    ["parakeet", "Uh so right now uh I followed the specs and added the documentations only"]);
+  assert.deepEqual(pick("Is there like any uh tech stack related selection", "Is there like any text type related selection")[0], "parakeet");
+  assert.deepEqual(pick("Okay, okay, okay, okay", "Ok ok ok ok.")[0], "parakeet");
+  // Hinglish: Whisper.
+  assert.deepEqual(pick("Meeting me uh test curvath. Thank you. Progress or yang to share karma to m lo we saw bigger dictionary.",
+    "Jab main thoda progress ho jaoonga to share kar loonga tum logon ke saath bhi agar dekhana hai.")[0], "whisper");
+  assert.deepEqual(pick("Mm-hmm.", "Thik hai."), ["whisper", "Thik hai."]);
+  assert.deepEqual(pick("Mm-hmm.", "Ji ji."), ["whisper", "Ji ji."]);
+  // Parakeet drifting into Spanish / German / Russian on Hindi it could not follow.
+  assert.deepEqual(pick("Y lo que sí, no que", "Ok sir. Ok."), ["whisper", "Ok sir. Ok."]);
+  assert.deepEqual(pick("Ich gehe. Gut, aber da, gell?", "Ok sir, ok.")[0], "whisper");
+  assert.deepEqual(pick("Ну", "Ok.")[0], "whisper");
+  // Only one heard anything; Devanagari-only Whisper output is noise.
+  assert.deepEqual(pick("", "Hello."), ["whisper", "Hello."]);
+  assert.deepEqual(pick("", "जाज"), [null, ""]);
+  assert.deepEqual(pick("Okay.", "जाज"), ["parakeet", "Okay."]);
+  assert.deepEqual(pick("Okay.", ""), ["parakeet", "Okay."]);
+  assert.equal(chooseLine({ parakeet: "Okay.", whisper: "Thik hai." }).alt, "Okay.", "the other engine's line is kept");
+  assert.deepEqual(hindiShare("Ok, abhi baat kar lenge baad mein"), { hits: 6, words: 7, share: 6 / 7 });
+});
+
+test("meeting log (hybrid): keeps the chosen line, the other engine's as alt; noise to both is dropped", () => {
+  const log = createMeetingLog({ route: "speakers" });
+  const [hinglish] = log.add(seg({ stream: "mic", start: 435, end: 441, text: "Meeting me uh test curvath.", texts: { parakeet: "Meeting me uh test curvath.", whisper: "Jab main thoda progress ho jaoonga to share kar loonga." }, voices: [{ id: "me", score: 0.9 }] }));
+  assert.equal(hinglish.text, "Jab main thoda progress ho jaoonga to share kar loonga.");
+  assert.equal(hinglish.engine, "whisper");
+  assert.equal(hinglish.alt, "Meeting me uh test curvath.");
+  const [english] = log.add(seg({ stream: "system", start: 352, end: 364, text: "I followed the specs", texts: { parakeet: "I followed the specs", whisper: "I followed the steps" } }));
+  assert.equal(english.text, "I followed the specs");
+  assert.equal(english.engine, "parakeet");
+  assert.deepEqual(log.add(seg({ stream: "system", start: 214, end: 215, text: "", texts: { parakeet: "", whisper: "जाज" } })), []);
+  assert.equal(log.all().length, 2);
+});
+
 test("assignSpeakers: a close-but-unsure match reads as a question", () => {
   const { speakers } = assignSpeakers([], { turns: [{ speaker: "S1", start: 0, end: 4 }], speakers: [{ id: "S1", voices: [{ id: "p-ravi", score: 0.42 }] }] }, [{ id: "p-ravi", name: "Ravi" }]);
   assert.equal(speakers[0].label, "Ravi?");
@@ -274,6 +316,60 @@ test("nameSpeaker: remembered, this meeting relabelled, and an older one with th
   assert.deepEqual(again.meeting.transcript.map((s) => s.speaker), ["Daniel", "You", "Moira K"]);
   assert.deepEqual(getMeeting(second.m.id, root).transcript.map((s) => s.speaker), ["Moira K", "You", "Speaker B"]);
   assert.throws(() => nameSpeaker(first.m.id, "S9", { name: "X" }, { root, voices }), /no voiceprint/);
+});
+
+test("saveSummary: notes next to the meeting, title in the list", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const m = startMeeting({ bin: fakeHelper(), root });
+  await new Promise((r) => setTimeout(r, 300));
+  await stopMeeting();
+  assert.equal(getMeeting(m.id, root).summary, null);
+  saveSummary(m.id, { title: "Release check", summary: "Ready on Thursday.", decisions: [], actions: [{ owner: "You", task: "Send the notes" }], questions: [] }, root);
+  const got = getMeeting(m.id, root);
+  assert.equal(got.summary.title, "Release check");
+  assert.equal(got.summary.actions[0].task, "Send the notes");
+  assert.ok(got.summary.createdAt);
+  assert.equal(listMeetings(root)[0].title, "Release check");
+  assert.throws(() => saveSummary("../x", {}, root), /bad meeting id/);
+});
+
+test("retranscribeMeeting: new engine replaces the transcript, old one and its notes kept, names survive", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const voices = path.join(root, "people.json");
+  const model = path.join(root, "model.bin");
+  writeFileSync(model, "x");
+  const P = (i) => Array.from({ length: 256 }, (_, k) => (k === i ? 1 : 0));
+  const { m } = await meetingWithVoices(root, voices, [P(1), P(2)], new Date(2026, 9, 25, 17, 56));
+  for (const f of ["mic.wav", "system.wav"]) writeFileSync(path.join(m.dir, f), "RIFF");
+  nameSpeaker(m.id, "S1", { name: "Pranshu" }, { root, voices });
+  saveSummary(m.id, { title: "Old notes", summary: "From the English transcript.", decisions: [], actions: [], questions: [] }, root);
+
+  // The redo hears the Hinglish line properly and the same two voices.
+  const bin = fakeHelper({
+    lines: [{ kind: "segment", stream: "mic", id: "m9", text: "Jab main thoda progress ho jaoonga to share kar loonga.", start: 435, end: 441, micDb: -25, systemDb: -120, micVoiced: 0.7, systemVoiced: 0 }],
+    diarized: {
+      turns: [{ speaker: "S1", start: 3.7, end: 10.9 }, { speaker: "S2", start: 15.8, end: 19.2 }],
+      speakers: [
+        { id: "S1", seconds: 7.2, turns: 1, print: P(1), voices: [{ id: "p-pranshu", score: 0.97 }], clip: "/x/S1.wav" },
+        { id: "S2", seconds: 2.4, turns: 1, print: P(2), voices: [{ id: "p-pranshu", score: 0.1 }] },
+      ],
+    },
+  });
+  const events = [];
+  const got = await retranscribeMeeting(m.id, { root, voices, model, bin, onEvent: (e) => events.push(e.state) });
+  assert.equal(got.engine, "hybrid", "English + Hinglish is the redo default");
+  assert.ok(got.retranscribedAt);
+  assert.equal(got.title, undefined, "notes of the old transcript are no longer the meeting's title");
+  assert.equal(got.summary, null);
+  assert.ok(got.transcript.some((s) => /share kar loonga/.test(s.text)));
+  assert.equal(got.speakers.find((s) => s.id === "S1").label, "Pranshu");
+  assert.equal(got.speakers.find((s) => s.id === "S1").named, true, "you confirmed Pranshu; that holds");
+  assert.ok(existsSync(path.join(m.dir, "transcript.parakeet.jsonl")));
+  assert.equal(JSON.parse(readFileSync(path.join(m.dir, "summary.parakeet.json"), "utf8")).title, "Old notes");
+  assert.ok(events.includes("diarizing"));
+  assert.equal(readdirSync(m.dir).some((f) => f.startsWith(".redo-")), false, "scratch folder removed");
+  assert.equal(JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))[0].clip, "/x/S1.wav", "clip paths outside the scratch folder untouched");
+  await assert.rejects(retranscribeMeeting("../x", { root }), /bad meeting id/);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {

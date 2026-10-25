@@ -8,7 +8,7 @@
 // segment as heard, echo flag included), transcript.jsonl (clean, written at
 // stop), meta.json.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,8 @@ export const PARAKEET_BIN = path.join(here, "../../audio-parakeet/bin/parakeet")
 export const ENGINES = {
   parakeet: { label: "English (Parakeet)" },
   whisper: { label: "Hindi + Hinglish (Whisper)", language: "hi" },
+  // Both on every line, the better one kept (chooseLine): mixed meetings.
+  hybrid: { label: "English + Hinglish (both, per line)", language: "hi" },
 };
 export function whisperModel(env = process.env) {
   return env.JARVIS_WHISPER_MODEL ?? path.join(os.homedir(), ".config", "jarvis", "models", "ggml-apex-hinglish-q8_0.bin");
@@ -46,6 +48,38 @@ function freshDir(root, id) {
 }
 
 export const speakerFor = (stream) => (stream === "mic" ? "You" : "Them");
+
+// English + Hinglish meetings (engine "hybrid"): every line comes back from
+// both Parakeet and Whisper, and this picks one. Whisper (Apex) writes Hindi
+// as romanized Hinglish, so a line whose Whisper text is full of Hindi words
+// was Hinglish: Whisper's. Otherwise Parakeet's, which hears English better
+// ("tech stack", "inferPulse") — unless Parakeet drifted into another
+// European language, its tell on Hindi it could not follow ("Y lo que sí").
+// Whisper alone in Devanagari is noise (Apex writes real Hindi romanized).
+// Measured on the first real call: English lines 0.00 Hindi words, Hinglish
+// lines 0.56–1.00.
+const HINDI_WORDS = new Set(("hai hain ho hoon hu main mai mein mera mere meri mujhe mujhko kya kyun kyon kaise kab kahan nahin nahi na " +
+  "ka ki ke ko se par aur yah yeh ye vah woh wo tha thi abhi bhi kar karo karna karenge kiya kiye raha rahe rahi rahenge ek hum hamse " +
+  "hamara tum tumhe aap apna apne wala wali wale lenge loonga lunga denge dunga doonga dekh dekho dekhte dekhate dekhana chalo theek thik " +
+  "accha achha acha haan ji ab jab tab jo sab kuch bahut baat baad pehle phir kal aaj dikkat matlab islie isliye lekin paega sakte " +
+  "sakta banaaya banaya karoon lete saath logon jaoonga jaunga thoda zyada jaldi bilkul shayad zaroor").split(" "));
+const FOREIGN = /[À-ÖØ-öø-ÿ\u0400-\u04FF]|\b(?:que|qué|lo|los|las|el|ich|und|nicht|ist|das|der|die|gut|aber|gell|nie|je|est|le|les|une|et|pas|ну|да|нет)\b/i;
+const DEVANAGARI = /[\u0900-\u097F]/;
+export function hindiShare(text) {
+  const w = String(text ?? "").toLowerCase().match(/[a-z']+/g) ?? [];
+  const hits = w.filter((x) => HINDI_WORDS.has(x)).length;
+  return { hits, words: w.length, share: w.length ? hits / w.length : 0 };
+}
+export function chooseLine({ parakeet = "", whisper = "" } = {}) {
+  const p = String(parakeet ?? "").trim(), w = String(whisper ?? "").trim();
+  const latinW = w && !(DEVANAGARI.test(w) && !/[a-z]/i.test(w));
+  if (!p) return latinW ? { text: w, engine: "whisper", alt: "" } : { text: "", engine: null, alt: w };
+  if (!latinW) return { text: p, engine: "parakeet", alt: w };
+  const h = hindiShare(w);
+  const hinglish = (h.hits >= 2 && h.share >= 0.2) || (h.hits >= 1 && h.words <= 2);
+  if (hinglish || FOREIGN.test(p)) return { text: w, engine: "whisper", alt: p };
+  return { text: p, engine: "parakeet", alt: w };
+}
 // A mic line whose voiceprint is clearly not yours, with no call audio to
 // blame it on: someone next to you.
 export const SOMEONE_ELSE = "Someone else";
@@ -93,8 +127,12 @@ export function createMeetingLog({ route } = {}) {
   return {
     setRoute(r) { currentRoute = r; },
     add(raw) {
+      // Hybrid: both engines' text came back; keep the better one.
+      const pick = raw.texts ? chooseLine(raw.texts) : null;
+      if (pick && !pick.text) return [];
       const seg = {
-        id: raw.id, stream: raw.stream, speaker: speakerFor(raw.stream), text: raw.text,
+        id: raw.id, stream: raw.stream, speaker: speakerFor(raw.stream), text: pick ? pick.text : raw.text,
+        ...(pick ? { engine: pick.engine, alt: pick.alt } : {}),
         start: raw.start, end: raw.end, micDb: raw.micDb, systemDb: raw.systemDb,
         micVoiced: raw.micVoiced, systemVoiced: raw.systemVoiced, echo: null,
         ...(raw.voices ? { voices: raw.voices, voiced: raw.voiced } : {}),
@@ -257,14 +295,14 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
   if (active) throw new Error("meeting already running");
   if (!ENGINES[engine]) throw new Error(`unknown speech engine: ${engine}`);
   if (!existsSync(bin)) throw new Error("meeting mode needs the live parakeet helper: npm run build:parakeet");
-  if (engine === "whisper" && !existsSync(model)) throw new Error(`Hindi/Hinglish needs the Whisper model: npm run fetch:whisper-model (expected ${model})`);
+  if (engine !== "parakeet" && !existsSync(model)) throw new Error(`Hindi/Hinglish needs the Whisper model: npm run fetch:whisper-model (expected ${model})`);
   const { id, dir } = freshDir(root, meetingId(now));
   const meta = { id, startedAt: now.toISOString(), endedAt: null, apps, engine, route: null, status: "recording", error: null, seconds: null };
   const writeMeta = () => writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   writeMeta();
 
   const args = ["--meeting", dir, ...apps.flatMap((a) => ["--app", a])];
-  if (engine === "whisper") args.push("--engine", "whisper", "--model", model, "--language", ENGINES.whisper.language);
+  if (engine !== "parakeet") args.push("--engine", engine, "--model", model, "--language", ENGINES[engine].language);
   if (voices && existsSync(voices)) args.push("--voices", voices);
   if (replay) args.push("--replay-mic", replay.mic, "--replay-system", replay.system);
   const child = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
@@ -436,6 +474,64 @@ export function nameSpeaker(meetingId, speakerId, { name, personId } = {}, { roo
   return { person, relabelled, meeting: getMeeting(meetingId, root) };
 }
 
+// Run a saved meeting through the pipeline again with another engine (most
+// often: recorded in English, spoken in Hinglish). Its own WAVs are replayed
+// into a scratch folder inside the meeting with the full stop path (echo,
+// voiceprints, speakers); the results replace the old ones. The old
+// transcript and notes stay beside them as transcript.<engine>.jsonl and
+// summary.<engine>.json (notes describe a transcript, so they go stale).
+// People you confirmed here stay confirmed when their voice is found again.
+export async function retranscribeMeeting(id, { engine = "hybrid", root = meetingsRoot(), voices = voicesFile(), model = whisperModel(), bin = PARAKEET_BIN, onEvent = () => {} } = {}) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
+  if (active) throw new Error("a meeting is running; try again when it stops");
+  const dir = path.join(root, id);
+  const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  const was = meta.engine ?? "parakeet";
+  for (const f of ["mic.wav", "system.wav"]) if (!existsSync(path.join(dir, f))) throw new Error(`${f} is missing; cannot re-transcribe`);
+  const work = mkdtempSync(path.join(dir, ".redo-"));
+  try {
+    const m = startMeeting({
+      root: work, engine, model, voices, bin, now: new Date(meta.startedAt),
+      replay: { mic: path.join(dir, "mic.wav"), system: path.join(dir, "system.wav") },
+      onEvent: (e) => { if (e.type === "status") onEvent(e); },
+    });
+    const r = await m.done;
+    if (r.status !== "done") throw new Error(r.error ?? `re-transcription ${r.status}`);
+    const keep = (from, to) => { if (existsSync(path.join(dir, from)) && !existsSync(path.join(dir, to))) renameSync(path.join(dir, from), path.join(dir, to)); };
+    keep("transcript.jsonl", `transcript.${was}.jsonl`);
+    keep("segments.jsonl", `segments.${was}.jsonl`);
+    keep("summary.json", `summary.${was}.json`);
+    for (const f of ["transcript.jsonl", "segments.jsonl", "speakers.json", "summary.json"]) rmSync(path.join(dir, f), { force: true });
+    rmSync(path.join(dir, "speakers"), { recursive: true, force: true });
+    for (const f of ["transcript.jsonl", "segments.jsonl"]) cpSync(path.join(m.dir, f), path.join(dir, f));
+    if (existsSync(path.join(m.dir, "speakers"))) cpSync(path.join(m.dir, "speakers"), path.join(dir, "speakers"), { recursive: true });
+    if (existsSync(path.join(m.dir, "speakers.json"))) {
+      const sp = JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))
+        .map((x) => ({ ...x, clip: x.clip ? path.join(dir, path.relative(m.dir, x.clip)) : x.clip }));
+      writeFileSync(path.join(dir, "speakers.json"), JSON.stringify(sp));
+    }
+    const fresh = JSON.parse(readFileSync(path.join(m.dir, "meta.json"), "utf8"));
+    const confirmed = new Set((meta.speakers ?? []).filter((x) => x.named).map((x) => x.match?.id));
+    for (const x of fresh.speakers ?? []) if (x.match && !x.match.uncertain && confirmed.has(x.match.id)) x.named = true;
+    Object.assign(meta, { engine, speakers: fresh.speakers ?? [], diarizeError: fresh.diarizeError, retranscribedAt: new Date().toISOString() });
+    delete meta.title;
+    writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+  return getMeeting(id, root);
+}
+
+// Phase 5: the notes the brain wrote for a meeting (meetings-brain.js).
+export function saveSummary(id, summary, root = meetingsRoot()) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
+  const dir = path.join(root, id);
+  writeFileSync(path.join(dir, "summary.json"), JSON.stringify({ ...summary, createdAt: new Date().toISOString() }, null, 2));
+  const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  meta.title = summary.title;
+  writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+}
+
 export function getMeeting(id, root = meetingsRoot()) {
   if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
   const dir = path.join(root, id);
@@ -449,5 +545,7 @@ export function getMeeting(id, root = meetingsRoot()) {
   const transcript = file === "transcript.jsonl"
     ? segs
     : [...new Map(segs.map((s) => [s.id, s])).values()].filter((s) => !s.echo).sort((a, b) => a.start - b.start);
-  return { ...meta, dir, transcript, text: transcriptText(transcript) };
+  const summaryFile = path.join(dir, "summary.json");
+  const summary = existsSync(summaryFile) ? JSON.parse(readFileSync(summaryFile, "utf8")) : null;
+  return { ...meta, dir, transcript, summary, text: transcriptText(transcript) };
 }

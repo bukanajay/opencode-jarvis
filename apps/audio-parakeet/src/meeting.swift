@@ -277,8 +277,9 @@ final class Meeting: @unchecked Sendable {
     }
 
     func segment(_ t: Track, _ c: Committed) {
-        var msg: [String: Any] = ["kind": "segment", "stream": t.name, "id": c.id, "text": c.text,
+        var msg: [String: Any] = ["kind": "segment", "stream": t.name, "id": c.id, "text": c.text.isEmpty ? (c.alt ?? "") : c.text,
                                   "start": (c.start * 100).rounded() / 100, "end": (c.end * 100).rounded() / 100]
+        if let a = c.alt { msg["texts"] = ["parakeet": c.text, "whisper": a] } // hybrid: Main picks (chooseLine)
         for (name, other) in tracks {
             let s = levelStats(other, c.start, c.end)
             msg["\(name)Db"] = s.db
@@ -303,10 +304,13 @@ final class Meeting: @unchecked Sendable {
     }
     var inFlightPrints = 0
 
-    func setASR(_ a: Transcriber) {
+    // alt: hybrid meetings, Whisper next to Parakeet (Main picks per line).
+    var alt: Transcriber?
+    func setASR(_ a: Transcriber, alt b: Transcriber? = nil) {
         q.async {
             self.asr = a
-            for t in self.tracks.values { t.listener.asr = a; t.listener.tick() }
+            self.alt = b
+            for t in self.tracks.values { t.listener.asr = a; t.listener.alt = b; t.listener.tick() }
         }
     }
 
@@ -453,6 +457,7 @@ final class Meeting: @unchecked Sendable {
         if inFlightPrints > 0 { q.asyncAfter(deadline: .now() + 0.05) { self.finish() }; return }
         for t in tracks.values { t.close() }
         asr?.shutdown()
+        alt?.shutdown()
         let seconds = Double(tracks.values.map(\.written).max() ?? 0) / Double(sampleRate)
         emit(["kind": "status", "state": "stopped", "note": dir, "seconds": (seconds * 10).rounded() / 10])
         exit(0)
@@ -528,11 +533,12 @@ func runMeeting() -> Never {
     let model = argValues("--model").first ?? ""
     let language = argValues("--language").first ?? "hi"
     var note = engineNote
-    if engine == "whisper" {
+    if engine == "whisper" || engine == "hybrid" {
         if model.isEmpty || !FileManager.default.fileExists(atPath: model) { fail("unavailable", "whisper model not found: \(model)", code: 1) }
         if !whisperAvailable { fail("unavailable", "this parakeet was built without whisper.cpp", code: 1) }
         note = "whisper \((model as NSString).lastPathComponent) (\(language)) on Metal"
-        meetingPartialEvery = whisperPartialEvery
+        if engine == "hybrid" { note = "\(engineNote) + \(note), per line" }
+        else { meetingPartialEvery = whisperPartialEvery }
     } else if engine != "parakeet" {
         fail("unavailable", "unknown engine \(engine)", code: 1)
     }
@@ -547,6 +553,7 @@ func runMeeting() -> Never {
     Task {
         do {
             if engine == "whisper" { m.setASR(try loadWhisper(model: model, language: language).0) }
+            else if engine == "hybrid" { m.setASR(Transcriber(try await loadASR()), alt: try loadWhisper(model: model, language: language).0) }
             else { m.setASR(Transcriber(try await loadASR())) }
         } catch { fail("unavailable", "model load failed: \(error)", code: 1) }
     }

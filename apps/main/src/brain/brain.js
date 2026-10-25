@@ -278,6 +278,24 @@ export function brainRespond(text, onDelta, opts = {}) {
   });
 }
 
+// A one-off question outside the conversation (a meeting's notes): its own
+// read-only session, so a long transcript does not pile up in the chat's
+// context. Same model choice and quota fallback as the brain; no fences act.
+export function brainAsk(prompt, { directory = projectDir(), timeoutMs = 240000 } = {}) {
+  return serialize(async () => {
+    const { client } = await ensureClient();
+    const ask = async (model) => {
+      const session = await client.session.create({
+        agent: BRAIN_AGENT, model, location: { directory }, title: "jarvis notes", permissions: READONLY_PERMISSIONS,
+      });
+      return runTurn(session.id, prompt, { timeoutMs });
+    };
+    let r = await ask(wantedBrainModel());
+    if (r.status === "failed" && isQuotaError(r.error)) r = await ask(JARVIS_FALLBACK_MODEL);
+    return { text: r.text ?? "", status: r.status, error: r.error };
+  });
+}
+
 // Pure decision over a review reply: at most one fence acts, and none once
 // the chain is out of rounds. Followups win over dispatches when both appear.
 export function decideReview(reply, round, maxRounds = MAX_ROUNDS) {

@@ -476,6 +476,59 @@ meetings" and a "People Jarvis knows" list (rename, forget) in Settings → You.
   nothing sent without approval.
 - Morning brief can list yesterday's meetings and open action items.
 
+### Phase 5 status (2026-10-26)
+
+Built: `apps/main/src/meetings-brain.js` (pure: recent-meetings line, which
+meeting a message is about, the context block with the whole transcript or
+the lines matching the question, the notes prompt and its strict parser,
+the brief line), `brainAsk` (a one-off read-only brain session, so a long
+transcript never piles up in the chat), `saveSummary` + `summary` in
+`getMeeting`, IPC `meeting.summarize|discuss`, the brief's meeting line, and
+a deck **Meetings** section (Summarize / Notes, Discuss, action items with
+*Hand to Jarvis*).
+
+- **Privacy line:** recording and transcription never leave the Mac. The
+  brain always sees one line per recent meeting (when, length, people,
+  title). A transcript goes to the brain model only for the meeting you
+  click Summarize / Discuss on, or a message that is about it ("what did
+  Pranshu say in the last call?"). Nothing is summarised automatically.
+- **Acting:** no new action path. The brain delegates to workers as usual,
+  and every preset keeps writes to connected systems (Linear, Slack, mail,
+  calendar) on *ask*, so they come back to you in the decision inbox.
+  *Hand to Jarvis* only fills the message box; you edit and send.
+- **Eval (`npm run eval:meeting-notes`, real model, a made-up English +
+  Hinglish standup):** 11/11 on gpt-6-luna in ~5 s: title, decisions,
+  owners and dues for all three action items (including one said in
+  Hinglish), the open question, timestamps, English output; a question
+  about the meeting is answered from the transcript without acting; "create
+  a Linear issue for Pranshu's item" becomes a worker dispatch. Seen: it
+  cited the [mm:ss] of the question instead of the answer once.
+- **Redo in Hindi + Hinglish** (`retranscribeMeeting`, deck button): a
+  saved meeting's own WAVs replayed through the full pipeline with Whisper;
+  the new transcript, voiceprints and speakers replace the old, which stay
+  as `transcript.<engine>.jsonl` / `summary.<engine>.json`; confirmed people
+  stay confirmed. On the first real call (8 min, 2.5 min to redo) your
+  07:15 Hinglish line came out ("Jab main thoda progress ho jaoonga to share
+  kar loonga…") and the new notes have your action item; but Whisper heard
+  the English worse ("inferPulse" → "in purpose", "tech stack" → "text
+  type", so the stack question dropped out).
+- **English + Hinglish (engine `hybrid`, now the redo default and a deck
+  language option):** every finished line is transcribed by both engines
+  (partials stay on Parakeet) and `chooseLine` keeps one: Whisper's when its
+  romanized text is Hindi words (≥2 and ≥20%, or 1 of ≤2 words) or when
+  Parakeet drifted into another European language ("Y lo que sí"), else
+  Parakeet's; Whisper-only Devanagari is noise and dropped. The other
+  engine's line is kept as `alt`. On the real call: English lines scored
+  0.00 Hindi words, Hinglish lines 0.56–1.00; redone, the call has
+  Parakeet's English ("specs", "core", "inferPulse") and Whisper's Hinglish
+  (06:45, 07:15, "Thik hai", "Ji ji"), and the notes have both your action
+  item and the tech-stack question. The notes prompt now says outright that
+  a promise in Hindi / Hinglish is an action item: without it the model
+  dropped "share kar loonga" once; with it, 3 of 3 runs kept it.
+- **Not done:** notes are not refreshed if you rename people later (Summarize
+  again); calendar invites are not linked to meetings; no per-meeting
+  retrieval beyond word overlap (fine for a meeting; across many meetings
+  it would want embeddings).
 ## Phase 6 — polish (optional)
 
 - Auto-detect a call: watch `kAudioDevicePropertyDeviceIsRunningSomewhere`

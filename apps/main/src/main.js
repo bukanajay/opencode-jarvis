@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers } from "./meeting.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers, saveSummary, retranscribeMeeting } from "./meeting.js";
+import { recentMeetingsLine, pickMeeting, meetingContextBlock, summaryPrompt, parseSummary, meetingsBriefLine } from "./meetings-brain.js";
 import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice, renameVoice, mergeVoices } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
@@ -20,7 +21,7 @@ import { loadRoutines, routinesSummary } from "./routines.js";
 import { createSecrets } from "./secrets.js";
 import { planConnector, splitValues, loadConnectors, saveConnectors, connectorView, connectorsSummary, briefConnectorLine, serverName, byId as connectorById } from "./connectors.js";
 import { createSlackBridge, loadSlackState, saveSlackState, controlSummary, SLACK_MANIFEST, DELIVER_MODES } from "./slack.js";
-import { brainRespond, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
+import { brainRespond, brainAsk, brainReview, setBrainModel, needsWorkerFallback } from "./brain/brain.js";
 import { collectWorkerReport, reportHeadline } from "./brain/report.js";
 import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChain, discardChain } from "./worktrees.js";
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
@@ -349,6 +350,20 @@ let chief = null; // chief-of-staff loop (inbox, routines, brief), created at st
 let presence = null; // menu bar + notifications
 
 // What the brain is shown about the deck each turn (actions.js stateBlock).
+// Phase 5: meetings in the brain's context. Always one line per recent
+// meeting; a meeting's summary and transcript only when the message is about
+// it, or you opened it with Discuss (for 30 minutes).
+let meetingFocus = null; // { id, at }
+const focusedMeeting = () => (meetingFocus && Date.now() - meetingFocus.at < 30 * 60 * 1000 ? meetingFocus.id : null);
+function meetingContext(text) {
+  try {
+    const id = pickMeeting(text, listMeetings(), focusedMeeting());
+    return id ? `\n${meetingContextBlock(getMeeting(id), text, { userName: shellStore().settings.userName })}` : "";
+  } catch (err) {
+    return `\n(meeting unavailable: ${String(err.message ?? err).slice(0, 80)})`;
+  }
+}
+
 function jarvisContext() {
   try {
     return stateBlock({
@@ -357,7 +372,7 @@ function jarvisContext() {
       settings: shellStore().settings,
       projects: recentProjects(),
       pendingPermissions: pendingPermissions.size,
-    }) + `\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}${connectorsCache ? `\n${connectorsSummary(connectorsCache)}` : ""}\n${autonomySummary(loadPolicy())}\n${playbooksSummary(playbooksNow())}`;
+    }) + `\n${recentMeetingsLine(listMeetings())}\n${inboxSummary(chief?.inbox() ?? [])}\n${routinesSummary(loadRoutines().routines)}${connectorsCache ? `\n${connectorsSummary(connectorsCache)}` : ""}\n${autonomySummary(loadPolicy())}\n${playbooksSummary(playbooksNow())}`;
   } catch (err) {
     return `(deck state unavailable: ${String(err.message ?? err).slice(0, 80)})`;
   }
@@ -615,7 +630,13 @@ function startChief(broadcast, commitText) {
       const auto = recentDecisions(500).filter((d) => d.at >= since && d.by === "jarvis");
       const blocked = auto.filter((d) => d.decision === "deny");
       const line = auto.length ? `Autonomy in the last 24h: ${auto.length - blocked.length} request(s) auto-approved, ${blocked.length} blocked${blocked.length ? ` (${blocked.slice(0, 3).map((d) => `${d.class} ${String(d.what ?? "").slice(0, 40)}`).join("; ")})` : ""}.` : "";
-      return [connectorsCache ? briefConnectorLine(connectorsCache) : "", line].filter(Boolean).join("\n");
+      const sinceBrief = lastBriefAt.value || Date.now() - 24 * 3600 * 1000;
+      let meetingsLine = "";
+      try {
+        const recent = listMeetings().filter((m) => Date.parse(m.startedAt) >= sinceBrief).slice(0, 5).map((m) => { try { return getMeeting(m.id); } catch { return m; } });
+        meetingsLine = meetingsBriefLine(recent, sinceBrief, { userName: shellStore().settings.userName });
+      } catch {}
+      return [connectorsCache ? briefConnectorLine(connectorsCache) : "", line, meetingsLine].filter(Boolean).join("\n");
     },
   });
   chief.start();
@@ -1154,7 +1175,7 @@ app.whenReady().then(async () => {
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }, { voice: isVoiceMode(shellStore()), context: jarvisContext() }).catch(async (err) => {
+    }, { voice: isVoiceMode(shellStore()), context: jarvisContext() + meetingContext(text) }).catch(async (err) => {
       // Brain fallback: direct read-only turn if the graph path fails. Loud,
       // so a broken brain never hides behind a working fallback.
       console.error("brain failed, falling back to direct turn:", err?.message ?? err);
@@ -1320,6 +1341,37 @@ app.whenReady().then(async () => {
       } catch {}
     }
     return { ok: false, reason: "every voice in your recent meetings has a name" };
+  });
+  // Phase 5: notes for a meeting (sent to the brain model only now, on your
+  // click), and Discuss: the next messages are about this meeting.
+  ipcMain.handle("meeting.summarize", async (_e, { id } = {}) => {
+    try {
+      const m = getMeeting(String(id ?? ""));
+      if (!m.transcript.length) return { ok: false, reason: "that meeting has no transcript" };
+      const r = await brainAsk(summaryPrompt(m, { userName: shellStore().settings.userName }));
+      if (r.status !== "ok") return { ok: false, reason: `the brain could not summarise it (${r.status}${r.error ? `: ${String(r.error).slice(0, 80)}` : ""})` };
+      const summary = parseSummary(r.text);
+      saveSummary(m.id, summary);
+      return { ok: true, summary };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    }
+  });
+  ipcMain.handle("meeting.retranscribe", async (_e, { id, engine = "hybrid" } = {}) => {
+    if (!Object.hasOwn(ENGINES, engine)) return { ok: false, reason: `unknown engine ${engine}` };
+    if (isEnrolling()) return { ok: false, reason: "a voice sample is being recorded" };
+    try {
+      const m = await retranscribeMeeting(String(id ?? ""), { engine, onEvent: (e) => win?.webContents.send("meeting.event", { ...e, redo: true }) });
+      return { ok: true, lines: m.transcript.length, speakers: m.speakers?.length ?? 0 };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    }
+  });
+  ipcMain.handle("meeting.discuss", async (_e, { id } = {}) => {
+    if (id == null) { meetingFocus = null; return { ok: true, focus: null }; }
+    getMeeting(String(id)); // throws on a bad id
+    meetingFocus = { id: String(id), at: Date.now() };
+    return { ok: true, focus: meetingFocus.id };
   });
   ipcMain.handle("meeting.clip", async (_e, { id, speakerId } = {}) => {
     if (!/^[\w-]+$/.test(String(id)) || !/^S\d+$/.test(String(speakerId))) throw new Error("bad clip");
