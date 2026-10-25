@@ -286,6 +286,14 @@
   .mt-who { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
   .mt-who .said { grid-column: 2; font-size: 12.5px; color: var(--dim); font-style: italic; }
   .mt-who .row { grid-column: 1 / -1; }
+  .mtg { border-top: 1px solid var(--line); padding: 8px 0; display: grid; gap: 6px; }
+  .mtg .head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+  .mtg .head strong { font-size: 13.5px; }
+  .mtg .notes { font-size: 13px; line-height: 1.5; display: grid; gap: 6px; }
+  .mtg .notes h4 { margin: 4px 0 0; font-family: var(--cap); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); font-weight: normal; }
+  .mtg .notes ul { margin: 0; padding-left: 18px; }
+  .mtg .notes li button { margin-left: 6px; font-size: 11px; padding: 1px 7px; }
+  .mtg .at { color: var(--dim); font-family: var(--cap); font-size: 11px; }
   .people-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   .people-row input { flex: 1; }
   @keyframes micbreathe { 0%, 100% { box-shadow: 0 0 10px rgba(200, 240, 74, 0.3); } 50% { box-shadow: 0 0 26px rgba(200, 240, 74, 0.6); } }
@@ -498,6 +506,13 @@
     <p class="row"><button class="ghost" id="people-name" type="button">Name voices from recent meetings</button><span class="res" id="people-note"></span></p>
     <p class="res" id="people-head" hidden>People Jarvis knows by voice:</p>
     <div id="people-list"></div>
+    </div>
+  </details>
+  <details id="meetings-settings" open>
+    <summary>Meetings</summary>
+    <div class="body">
+    <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click.</p>
+    <div id="meetings-list"></div>
     </div>
   </details>
   <details id="slack-settings" open>
@@ -1419,6 +1434,7 @@
       for (const p of mtPartial.values()) p.remove();
       mtPartial.clear();
       if (ev.toName > 0 && ev.status !== "failed") askNames(ev.id);
+      paintMeetings().catch(() => {});
       if (ev.status === "failed") addSys(`Meeting stopped: ${ev.error}`, { bad: true });
       else addSys(`Meeting saved: ${ev.segments} line${ev.segments === 1 ? "" : "s"}, ${Math.round(ev.seconds ?? 0)} s${ev.speakers > 1 ? `, ${ev.speakers} voices on the call` : ""} · ${ev.dir}`);
     }
@@ -2128,6 +2144,100 @@
     }
   }
   paintPeople().catch(() => {});
+  // Phase 5: your recent meetings, their notes, and talking about one.
+  const mtgWhen = (iso) => new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  function renderNotes(box, m, summary) {
+    box.innerHTML = "";
+    const add = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; box.append(el); return el; };
+    add("div", summary.summary);
+    const list = (title, rows, line) => {
+      if (!rows?.length) return;
+      add("h4", title);
+      const ul = document.createElement("ul");
+      for (const r of rows) ul.append(line(r));
+      box.append(ul);
+    };
+    const at = (r) => (r.at ? ` [${r.at}]` : "");
+    list("Decisions", summary.decisions, (d) => Object.assign(document.createElement("li"), { textContent: d.text + at(d) }));
+    list("Action items", summary.actions, (a) => {
+      const li = document.createElement("li");
+      li.textContent = `${a.owner}: ${a.task}${a.due ? ` (due ${a.due})` : ""}${at(a)}`;
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "ghost";
+      go.textContent = "Hand to Jarvis";
+      go.title = "Puts it in the message box for you to edit and send; anything that writes to Linear, Slack, mail or the calendar asks you first";
+      go.onclick = async () => {
+        await window.jarvis.meetingDiscuss(m.id);
+        closeDrawer();
+        $("q").value = `From the "${summary.title}" meeting: ${a.task}${a.owner && !/^(you|unassigned)$/i.test(a.owner) ? ` (${a.owner}'s item)` : ""}${a.due ? `, due ${a.due}` : ""}. `;
+        $("q").focus();
+      };
+      li.append(go);
+      return li;
+    });
+    list("Open questions", summary.questions, (q) => Object.assign(document.createElement("li"), { textContent: q.text + at(q) }));
+  }
+  async function paintMeetings() {
+    const all = (await window.jarvis.meetingList().catch(() => [])).filter((m) => m.status === "done").slice(0, 8);
+    const list = $("meetings-list");
+    list.innerHTML = "";
+    if (!all.length) { list.textContent = "No meetings yet."; return; }
+    for (const m of all) {
+      const row = document.createElement("div");
+      row.className = "mtg";
+      const head = document.createElement("div");
+      head.className = "head";
+      const who = (m.speakers ?? []).map((s) => s.label).filter((l) => l && !/^(Them|Speaker [A-Z])$/.test(l));
+      const title = document.createElement("strong");
+      title.textContent = m.title || "Untitled meeting";
+      const info = document.createElement("span");
+      info.className = "at";
+      info.textContent = `${mtgWhen(m.startedAt)} · ${Math.max(1, Math.round((m.seconds ?? 0) / 60))} min${who.length ? ` · ${who.join(", ")}` : ""}`;
+      head.append(title, info);
+      const btns = document.createElement("p");
+      btns.className = "row";
+      const notes = document.createElement("div");
+      notes.className = "notes";
+      notes.hidden = true;
+      const sum = document.createElement("button");
+      sum.type = "button";
+      sum.className = "ghost";
+      sum.textContent = m.title ? "Notes" : "Summarize";
+      sum.onclick = async () => {
+        if (!notes.hidden && m.title) { notes.hidden = true; return; }
+        sum.disabled = true;
+        let summary = null;
+        if (m.title) summary = (await window.jarvis.meetingGet(m.id).catch(() => null))?.summary;
+        if (!summary) {
+          sum.textContent = "Summarizing…";
+          const r = await window.jarvis.meetingSummarize(m.id);
+          if (!r.ok) { sum.textContent = "Summarize"; sum.disabled = false; notes.hidden = false; notes.textContent = `Couldn't: ${r.reason}`; return; }
+          summary = r.summary;
+          m.title = summary.title;
+          title.textContent = summary.title;
+        }
+        sum.textContent = "Notes";
+        sum.disabled = false;
+        renderNotes(notes, m, summary);
+        notes.hidden = false;
+      };
+      const talk = document.createElement("button");
+      talk.type = "button";
+      talk.className = "ghost";
+      talk.textContent = "Discuss";
+      talk.onclick = async () => {
+        await window.jarvis.meetingDiscuss(m.id);
+        closeDrawer();
+        addSys(`Talking about ${m.title ? `“${m.title}”` : "the meeting"} from ${mtgWhen(m.startedAt)}. Ask anything; Jarvis sees its transcript for the next 30 minutes.`);
+        $("q").focus();
+      };
+      btns.append(sum, talk);
+      row.append(head, btns, notes);
+      list.append(row);
+    }
+  }
+  paintMeetings().catch(() => {});
   $("people-name").onclick = async () => {
     $("people-note").textContent = "looking…";
     const r = await window.jarvis.meetingNextToName();

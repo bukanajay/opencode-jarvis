@@ -476,6 +476,37 @@ meetings" and a "People Jarvis knows" list (rename, forget) in Settings → You.
   nothing sent without approval.
 - Morning brief can list yesterday's meetings and open action items.
 
+### Phase 5 status (2026-10-26)
+
+Built: `apps/main/src/meetings-brain.js` (pure: recent-meetings line, which
+meeting a message is about, the context block with the whole transcript or
+the lines matching the question, the notes prompt and its strict parser,
+the brief line), `brainAsk` (a one-off read-only brain session, so a long
+transcript never piles up in the chat), `saveSummary` + `summary` in
+`getMeeting`, IPC `meeting.summarize|discuss`, the brief's meeting line, and
+a deck **Meetings** section (Summarize / Notes, Discuss, action items with
+*Hand to Jarvis*).
+
+- **Privacy line:** recording and transcription never leave the Mac. The
+  brain always sees one line per recent meeting (when, length, people,
+  title). A transcript goes to the brain model only for the meeting you
+  click Summarize / Discuss on, or a message that is about it ("what did
+  Pranshu say in the last call?"). Nothing is summarised automatically.
+- **Acting:** no new action path. The brain delegates to workers as usual,
+  and every preset keeps writes to connected systems (Linear, Slack, mail,
+  calendar) on *ask*, so they come back to you in the decision inbox.
+  *Hand to Jarvis* only fills the message box; you edit and send.
+- **Eval (`npm run eval:meeting-notes`, real model, a made-up English +
+  Hinglish standup):** 11/11 on gpt-6-luna in ~5 s: title, decisions,
+  owners and dues for all three action items (including one said in
+  Hinglish), the open question, timestamps, English output; a question
+  about the meeting is answered from the transcript without acting; "create
+  a Linear issue for Pranshu's item" becomes a worker dispatch. Seen: it
+  cited the [mm:ss] of the question instead of the answer once.
+- **Not done:** notes are not refreshed if you rename people later (Summarize
+  again); calendar invites are not linked to meetings; no per-meeting
+  retrieval beyond word overlap (fine for a meeting; across many meetings
+  it would want embeddings).
 ## Phase 6 — polish (optional)
 
 - Auto-detect a call: watch `kAudioDevicePropertyDeviceIsRunningSomewhere`

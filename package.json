@@ -32,6 +32,7 @@
     "fetch:whisper-model": "bash scripts/fetch-whisper-model.sh",
     "prove:jarvis-voice": "node scripts/prove-jarvis-voice.mjs",
     "eval:brain": "node scripts/eval-brain.mjs",
+    "eval:meeting-notes": "node scripts/eval-meeting-notes.mjs",
     "prove:audio": "node scripts/prove-audio.mjs",
     "prove:brain": "node scripts/prove-brain.mjs",
     "prove:act": "node scripts/prove-brain-act.mjs",

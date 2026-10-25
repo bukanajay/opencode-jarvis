@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import os from "node:os";
 import path from "node:path";
 import {
-  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, isMeetingActive, listMeetings, meetingId, speakerFor,
+  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -274,6 +274,21 @@ test("nameSpeaker: remembered, this meeting relabelled, and an older one with th
   assert.deepEqual(again.meeting.transcript.map((s) => s.speaker), ["Daniel", "You", "Moira K"]);
   assert.deepEqual(getMeeting(second.m.id, root).transcript.map((s) => s.speaker), ["Moira K", "You", "Speaker B"]);
   assert.throws(() => nameSpeaker(first.m.id, "S9", { name: "X" }, { root, voices }), /no voiceprint/);
+});
+
+test("saveSummary: notes next to the meeting, title in the list", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const m = startMeeting({ bin: fakeHelper(), root });
+  await new Promise((r) => setTimeout(r, 300));
+  await stopMeeting();
+  assert.equal(getMeeting(m.id, root).summary, null);
+  saveSummary(m.id, { title: "Release check", summary: "Ready on Thursday.", decisions: [], actions: [{ owner: "You", task: "Send the notes" }], questions: [] }, root);
+  const got = getMeeting(m.id, root);
+  assert.equal(got.summary.title, "Release check");
+  assert.equal(got.summary.actions[0].task, "Send the notes");
+  assert.ok(got.summary.createdAt);
+  assert.equal(listMeetings(root)[0].title, "Release check");
+  assert.throws(() => saveSummary("../x", {}, root), /bad meeting id/);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {

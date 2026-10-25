@@ -436,6 +436,16 @@ export function nameSpeaker(meetingId, speakerId, { name, personId } = {}, { roo
   return { person, relabelled, meeting: getMeeting(meetingId, root) };
 }
 
+// Phase 5: the notes the brain wrote for a meeting (meetings-brain.js).
+export function saveSummary(id, summary, root = meetingsRoot()) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
+  const dir = path.join(root, id);
+  writeFileSync(path.join(dir, "summary.json"), JSON.stringify({ ...summary, createdAt: new Date().toISOString() }, null, 2));
+  const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  meta.title = summary.title;
+  writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+}
+
 export function getMeeting(id, root = meetingsRoot()) {
   if (!/^[\w-]+$/.test(String(id))) throw new Error("bad meeting id");
   const dir = path.join(root, id);
@@ -449,5 +459,7 @@ export function getMeeting(id, root = meetingsRoot()) {
   const transcript = file === "transcript.jsonl"
     ? segs
     : [...new Map(segs.map((s) => [s.id, s])).values()].filter((s) => !s.echo).sort((a, b) => a.start - b.start);
-  return { ...meta, dir, transcript, text: transcriptText(transcript) };
+  const summaryFile = path.join(dir, "summary.json");
+  const summary = existsSync(summaryFile) ? JSON.parse(readFileSync(summaryFile, "utf8")) : null;
+  return { ...meta, dir, transcript, summary, text: transcriptText(transcript) };
 }
