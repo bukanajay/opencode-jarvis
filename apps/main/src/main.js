@@ -1357,7 +1357,7 @@ app.whenReady().then(async () => {
       return { ok: false, reason: String(err.message ?? err) };
     }
   });
-  ipcMain.handle("meeting.retranscribe", async (_e, { id, engine = "whisper" } = {}) => {
+  ipcMain.handle("meeting.retranscribe", async (_e, { id, engine = "hybrid" } = {}) => {
     if (!Object.hasOwn(ENGINES, engine)) return { ok: false, reason: `unknown engine ${engine}` };
     if (isEnrolling()) return { ok: false, reason: "a voice sample is being recorded" };
     try {

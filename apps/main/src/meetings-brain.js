@@ -118,6 +118,7 @@ export function summaryPrompt(meeting, { userName = "" } = {}) {
     `"actions": [{"owner": "<who>", "task": "<imperative, self-contained>", "due": "<only if said, else omit>", "at": "mm:ss"}], ` +
     `"questions": [{"text": "<left open>", "at": "mm:ss"}]}\n` +
     `Rules: only what was actually said; empty arrays when there is nothing; "at" is the [mm:ss] where it was said; owner is a person's name, "${userName || "You"}" for the user ("You" in the transcript), or "unassigned"; ` +
+    `every promise to do something is an action item, also when it is said in Hindi or Hinglish ("main kar dunga", "bhej doonga", "share kar loonga" = I will …) or buried in a long line; ` +
     `write in English even when the meeting mixes Hindi and English; ignore small talk and transcription noise.\n` +
     `Meeting: ${clock(meeting.seconds ?? 0)} long${who.length ? `, with ${who.join(", ")}` : ""}. "You" is ${userName || "the user"}.\n` +
     `Transcript:\n${transcriptFor(meeting, "", 60000).text}`;

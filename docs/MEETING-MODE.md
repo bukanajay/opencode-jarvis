@@ -511,8 +511,20 @@ a deck **Meetings** section (Summarize / Notes, Discuss, action items with
   07:15 Hinglish line came out ("Jab main thoda progress ho jaoonga to share
   kar loonga…") and the new notes have your action item; but Whisper heard
   the English worse ("inferPulse" → "in purpose", "tech stack" → "text
-  type", so the stack question dropped out). A per-line choice of engine
-  (keep Parakeet's English, take Whisper's Hinglish) would get both.
+  type", so the stack question dropped out).
+- **English + Hinglish (engine `hybrid`, now the redo default and a deck
+  language option):** every finished line is transcribed by both engines
+  (partials stay on Parakeet) and `chooseLine` keeps one: Whisper's when its
+  romanized text is Hindi words (≥2 and ≥20%, or 1 of ≤2 words) or when
+  Parakeet drifted into another European language ("Y lo que sí"), else
+  Parakeet's; Whisper-only Devanagari is noise and dropped. The other
+  engine's line is kept as `alt`. On the real call: English lines scored
+  0.00 Hindi words, Hinglish lines 0.56–1.00; redone, the call has
+  Parakeet's English ("specs", "core", "inferPulse") and Whisper's Hinglish
+  (06:45, 07:15, "Thik hai", "Ji ji"), and the notes have both your action
+  item and the tech-stack question. The notes prompt now says outright that
+  a promise in Hindi / Hinglish is an action item: without it the model
+  dropped "share kar loonga" once; with it, 3 of 3 runs kept it.
 - **Not done:** notes are not refreshed if you rename people later (Summarize
   again); calendar invites are not linked to meetings; no per-meeting
   retrieval beyond word overlap (fine for a meeting; across many meetings

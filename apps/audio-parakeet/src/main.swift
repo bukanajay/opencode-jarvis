@@ -169,6 +169,7 @@ struct Committed {
     let start: Double
     let end: Double
     let samples: [Float]             // the utterance itself, for its voiceprint
+    var alt: String? = nil           // hybrid: the second engine's text (Whisper)
 }
 
 // All mutable state lives on one serial queue; the tap and model tasks hop onto it.
@@ -182,6 +183,7 @@ final class Listener: @unchecked Sendable {
     var onCommit: ((Committed) -> Void)?
     var id = UUID().uuidString
     var asr: Transcriber?
+    var alt: Transcriber?            // hybrid meetings: Whisper on every finished line (not partials)
     var audio: [Float] = []          // 16 kHz mono since mic start (since `offset` when trimmed)
     var offset = 0                   // samples trimmed off the front of `audio`
     var vadAt = 0                    // stream sample index of the next frame the VAD has not seen
@@ -301,13 +303,19 @@ final class Listener: @unchecked Sendable {
             lastText = ""
             revision = 0
             inFlight += 1
+            let alt = self.alt
             Task {
                 let text = await asr.text(samples, source)
+                let altText = await alt?.text(samples, source)
                 self.q.async {
                     debug(["stream": self.stream ?? "-", "result": text])
                     self.inFlight -= 1
-                    // Empty: noise, a cough, a door.
-                    if !text.isEmpty { onCommit(Committed(id: id, text: text, start: startSec, end: endSec, samples: samples)) }
+                    // Empty: noise, a cough, a door (in hybrid, only when both engines heard nothing).
+                    if !text.isEmpty || !(altText ?? "").isEmpty {
+                        var c = Committed(id: id, text: text, start: startSec, end: endSec, samples: samples)
+                        c.alt = altText
+                        onCommit(c)
+                    }
                     done?()
                 }
             }

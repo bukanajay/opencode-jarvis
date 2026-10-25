@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import os from "node:os";
 import path from "node:path";
 import {
-  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, retranscribeMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
+  chooseLine, hindiShare, assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, retranscribeMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -224,6 +224,44 @@ test("assignSpeakers: one voice on the call owns every call-side line, even far 
   assert.deepEqual([...who].map(([k, v]) => `${k}:${v.id}`), ["far:S1"]);
 });
 
+test("chooseLine: the real call's lines, English from Parakeet, Hinglish from Whisper", () => {
+  const pick = (parakeet, whisper) => { const r = chooseLine({ parakeet, whisper }); return [r.engine, r.text]; };
+  // English: Parakeet hears it better.
+  assert.deepEqual(pick("Uh so right now uh I followed the specs and added the documentations only", "Sir right now I followed the steps and added the documentation only"),
+    ["parakeet", "Uh so right now uh I followed the specs and added the documentations only"]);
+  assert.deepEqual(pick("Is there like any uh tech stack related selection", "Is there like any text type related selection")[0], "parakeet");
+  assert.deepEqual(pick("Okay, okay, okay, okay", "Ok ok ok ok.")[0], "parakeet");
+  // Hinglish: Whisper.
+  assert.deepEqual(pick("Meeting me uh test curvath. Thank you. Progress or yang to share karma to m lo we saw bigger dictionary.",
+    "Jab main thoda progress ho jaoonga to share kar loonga tum logon ke saath bhi agar dekhana hai.")[0], "whisper");
+  assert.deepEqual(pick("Mm-hmm.", "Thik hai."), ["whisper", "Thik hai."]);
+  assert.deepEqual(pick("Mm-hmm.", "Ji ji."), ["whisper", "Ji ji."]);
+  // Parakeet drifting into Spanish / German / Russian on Hindi it could not follow.
+  assert.deepEqual(pick("Y lo que sí, no que", "Ok sir. Ok."), ["whisper", "Ok sir. Ok."]);
+  assert.deepEqual(pick("Ich gehe. Gut, aber da, gell?", "Ok sir, ok.")[0], "whisper");
+  assert.deepEqual(pick("Ну", "Ok.")[0], "whisper");
+  // Only one heard anything; Devanagari-only Whisper output is noise.
+  assert.deepEqual(pick("", "Hello."), ["whisper", "Hello."]);
+  assert.deepEqual(pick("", "जाज"), [null, ""]);
+  assert.deepEqual(pick("Okay.", "जाज"), ["parakeet", "Okay."]);
+  assert.deepEqual(pick("Okay.", ""), ["parakeet", "Okay."]);
+  assert.equal(chooseLine({ parakeet: "Okay.", whisper: "Thik hai." }).alt, "Okay.", "the other engine's line is kept");
+  assert.deepEqual(hindiShare("Ok, abhi baat kar lenge baad mein"), { hits: 6, words: 7, share: 6 / 7 });
+});
+
+test("meeting log (hybrid): keeps the chosen line, the other engine's as alt; noise to both is dropped", () => {
+  const log = createMeetingLog({ route: "speakers" });
+  const [hinglish] = log.add(seg({ stream: "mic", start: 435, end: 441, text: "Meeting me uh test curvath.", texts: { parakeet: "Meeting me uh test curvath.", whisper: "Jab main thoda progress ho jaoonga to share kar loonga." }, voices: [{ id: "me", score: 0.9 }] }));
+  assert.equal(hinglish.text, "Jab main thoda progress ho jaoonga to share kar loonga.");
+  assert.equal(hinglish.engine, "whisper");
+  assert.equal(hinglish.alt, "Meeting me uh test curvath.");
+  const [english] = log.add(seg({ stream: "system", start: 352, end: 364, text: "I followed the specs", texts: { parakeet: "I followed the specs", whisper: "I followed the steps" } }));
+  assert.equal(english.text, "I followed the specs");
+  assert.equal(english.engine, "parakeet");
+  assert.deepEqual(log.add(seg({ stream: "system", start: 214, end: 215, text: "", texts: { parakeet: "", whisper: "जाज" } })), []);
+  assert.equal(log.all().length, 2);
+});
+
 test("assignSpeakers: a close-but-unsure match reads as a question", () => {
   const { speakers } = assignSpeakers([], { turns: [{ speaker: "S1", start: 0, end: 4 }], speakers: [{ id: "S1", voices: [{ id: "p-ravi", score: 0.42 }] }] }, [{ id: "p-ravi", name: "Ravi" }]);
   assert.equal(speakers[0].label, "Ravi?");
@@ -319,7 +357,7 @@ test("retranscribeMeeting: new engine replaces the transcript, old one and its n
   });
   const events = [];
   const got = await retranscribeMeeting(m.id, { root, voices, model, bin, onEvent: (e) => events.push(e.state) });
-  assert.equal(got.engine, "whisper");
+  assert.equal(got.engine, "hybrid", "English + Hinglish is the redo default");
   assert.ok(got.retranscribedAt);
   assert.equal(got.title, undefined, "notes of the old transcript are no longer the meeting's title");
   assert.equal(got.summary, null);

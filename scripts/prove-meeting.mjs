@@ -98,6 +98,14 @@ const PANEL_AGAIN = [
   { who: "Daniel", stream: "system", voice: "Daniel", text: "Then I will start the deployment this afternoon." },
 ];
 
+// English + Hinglish (hybrid): both engines on every line; English lines must
+// come from Parakeet (exact), the Hindi one from Whisper (romanized).
+const MIXED = [
+  { who: "Them", stream: "system", voice: "Daniel", text: "Can you send me the release notes before Friday?", engine: "parakeet" },
+  { who: "You", stream: "mic", voice: "Lekha", text: "हाँ, मैं आज शाम तक रिलीज़ नोट्स भेज दूँगा।", keys: ["aaj", "release", "notes", "bhej"], engine: "whisper" },
+  { who: "Them", stream: "system", voice: "Daniel", text: "Great, and please add the migration steps to the notes.", engine: "parakeet" },
+];
+
 async function enrollSamantha() {
   const said = "Hi Jarvis, this is my voice. I usually spend the morning on code reviews and the afternoon in meetings with the team. " +
     "When something breaks in production, I want a short summary first and the details after. " +
@@ -154,6 +162,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH, voices = null
   got.transcript.forEach((s, i) => {
     const ok = lines[i].keys ? lines[i].keys.every((k) => norm(s.text).includes(k)) : norm(s.text) === norm(lines[i].text);
     if (!ok) throw drift();
+    if (lines[i].engine && s.engine !== lines[i].engine) throw new Error(`line ${i + 1} came from ${s.engine}, expected ${lines[i].engine}: ${s.text} (other: ${s.alt})`);
   });
   console.log(`transcript-ok:\n${got.text.split("\n").map((l) => "  " + l).join("\n")}`);
 
@@ -188,6 +197,10 @@ try {
   console.log("remembered-ok: the next meeting knew everyone by voice");
   if (existsSync(whisperModel())) await run(-12, { engine: "whisper", lines: HINDI });
   else console.log("skip whisper: no model (npm run fetch:whisper-model)");
+  if (existsSync(whisperModel())) {
+    await run(-12, { engine: "hybrid", lines: MIXED });
+    console.log("hybrid-ok: English lines from Parakeet, the Hindi line from Whisper");
+  }
 } finally {
   if (process.env.PROVE_KEEP) console.log(`kept fixtures in ${dir}`);
   else rmSync(dir, { recursive: true, force: true });
