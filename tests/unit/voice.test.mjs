@@ -83,3 +83,23 @@ test("latinWake: Devanagari 'hey Jarvis' (Hindi / Marathi via Whisper) wakes Jar
   assert.deepEqual(r, { action: "wake-task", text: "आजच्या मीटिंगचा सारांश सांग" });
   assert.equal(nextVoiceAction("आजच्या मीटिंगचा सारांश सांग", { voiceMode: "on", wakeWord: "jarvis" }).action, "ignored", "no wake word, no turn");
 });
+
+test("every allowlisted setting is saved under its own key (listenLanguage was saved as 'undefined')", async () => {
+  const { ALLOWLIST, DEFAULTS, loadStore, applyAppCommand } = await import("../../apps/main/src/shell.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-shell-")), "shell.json");
+  const value = { "set.userName": "Ajay", "set.listenLanguage": "mr", "set.meetingAudioDays": "30", "set.meetingPrompt": "off" };
+  for (const name of ALLOWLIST) {
+    const key = name.slice(4);
+    assert.ok(Object.hasOwn(DEFAULTS, key), `${name}: has a default`);
+    const v = value[name] ?? DEFAULTS[key];
+    applyAppCommand(loadStore(file), name, { value: v });
+    assert.equal(loadStore(file).settings[key], v, `${name} took effect`);
+  }
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(file, "utf8")).settings, "undefined"), false);
+  // A file written by the bug loads clean.
+  fs.writeFileSync(file, JSON.stringify({ settings: { undefined: "mr" }, audit: [] }));
+  assert.equal(Object.hasOwn(loadStore(file).settings, "undefined"), false);
+});

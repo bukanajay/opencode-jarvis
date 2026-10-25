@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin", "set.meetingPrompt", "set.meetingAudioDays", "set.listenLanguage"];
+export const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin", "set.meetingPrompt", "set.meetingAudioDays", "set.listenLanguage"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -87,6 +87,7 @@ function readFile(file) {
 export function loadStore(file = storePath()) {
   const raw = readFile(file);
   const settings = { ...DEFAULTS, ...(raw?.settings ?? {}) };
+  delete settings.undefined; // left by a setting saved before it had a KEY_OF entry
   const audit = Array.isArray(raw?.audit) ? raw.audit : [];
   return { file, settings, audit };
 }
@@ -115,6 +116,9 @@ const KEY_OF = {
   "set.userName": "userName",
   "set.onboarded": "onboarded",
   "set.launchAtLogin": "launchAtLogin",
+  "set.meetingPrompt": "meetingPrompt",
+  "set.meetingAudioDays": "meetingAudioDays",
+  "set.listenLanguage": "listenLanguage",
 };
 export const ON_OFF = ["on", "off"];
 export const ISOLATIONS = ["worktree", "shared"];
@@ -185,6 +189,9 @@ function validate(name, args) {
 export function applyAppCommand(store, name, args) {
   const value = validate(name, args);
   const key = KEY_OF[name];
+  // An allowlisted command without a key would be saved as "undefined" and
+  // never take effect (that happened to listenLanguage): refuse it loudly.
+  if (!key) throw new Error(`${name}: no settings key (add it to KEY_OF)`);
   store.settings[key] = value;
   const entry = {
     at: Date.now(),
