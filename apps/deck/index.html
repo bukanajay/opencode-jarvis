@@ -1393,13 +1393,14 @@
       mtPartial.set(ev.stream, row);
     } else if (ev.type === "status") {
       if (ev.state === "listening") $("mt-status").textContent = `recording${ev.engine === "whisper" ? " · hinglish" : ""}${ev.route && ev.route !== "replay" ? ` · ${ev.route}` : ""}`;
+      else if (ev.state === "diarizing") $("mt-status").textContent = "saving · telling speakers apart";
       else if (ev.state === "system-audio-denied") addSys("Meeting: the call app is playing but Jarvis hears silence. Allow System Audio Recording for parakeet in System Settings → Privacy & Security.", { bad: true });
     } else if (ev.type === "stopped") {
       paintMeeting("");
       for (const p of mtPartial.values()) p.remove();
       mtPartial.clear();
       if (ev.status === "failed") addSys(`Meeting stopped: ${ev.error}`, { bad: true });
-      else addSys(`Meeting saved: ${ev.segments} line${ev.segments === 1 ? "" : "s"}, ${Math.round(ev.seconds ?? 0)} s · ${ev.dir}`);
+      else addSys(`Meeting saved: ${ev.segments} line${ev.segments === 1 ? "" : "s"}, ${Math.round(ev.seconds ?? 0)} s${ev.speakers > 1 ? `, ${ev.speakers} voices on the call` : ""} · ${ev.dir}`);
     }
   });
   $("meet").onclick = async () => {

@@ -78,6 +78,17 @@ const VOICES = [
   { who: "You", stream: "mic", voice: "Samantha", text: "Sure, I will send them this afternoon." },
 ];
 
+// Phase 3: three people on the call; after stop they become Speaker A/B/C,
+// lettered by who spoke first.
+const PANEL = [
+  { who: "You", stream: "mic", voice: "Samantha", text: "Morning everyone, let's go through the release." },
+  { who: "Speaker A", stream: "system", voice: "Daniel", text: "The billing service is ready for the rollout on Thursday." },
+  { who: "Speaker B", stream: "system", voice: "Moira", text: "The migration script still needs one more review before then." },
+  { who: "Speaker C", stream: "system", voice: "Aman", text: "I can take that review today, I already read the schema changes." },
+  { who: "Speaker A", stream: "system", voice: "Daniel", text: "Great, then we are on track for Thursday." },
+  { who: "You", stream: "mic", voice: "Samantha", text: "Perfect, thanks everyone." },
+];
+
 async function enrollSamantha() {
   const said = "Hi Jarvis, this is my voice. I usually spend the morning on code reviews and the afternoon in meetings with the team. " +
     "When something breaks in production, I want a short summary first and the details after. " +
@@ -152,7 +163,9 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH, voices = null
 try {
   await run(-30);
   await run(-12);
-  await run(-12, { lines: VOICES, voices: await enrollSamantha() });
+  const samantha = await enrollSamantha();
+  await run(-12, { lines: VOICES, voices: samantha });
+  await run(-12, { lines: PANEL, voices: samantha });
   if (existsSync(whisperModel())) await run(-12, { engine: "whisper", lines: HINDI });
   else console.log("skip whisper: no model (npm run fetch:whisper-model)");
 } finally {

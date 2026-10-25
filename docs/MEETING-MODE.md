@@ -383,6 +383,38 @@ voiceprint case in `prove:meeting`.
 Done when: a 3-person call yields You + two distinct remote speakers with
 <10% of speech mis-assigned on a hand-checked sample.
 
+### Phase 3 status (2026-10-25)
+
+Built: `src/diarize.swift` (`parakeet --diarize DIR`), `diarizeMeeting` +
+`assignSpeakers` in `meeting.js` (runs when a meeting stops, before the
+transcript is written), `speakers.json` per meeting (voiceprints, for Phase
+4) and `meta.speakers` (labels, seconds, clip), deck relabels the live
+panel in place.
+
+- **Not FluidAudio's offline diarizer.** On three clearly different voices
+  taking turns (Daniel / Moira / Aman), it returned one speaker at any
+  threshold, and told there were exactly three it still mixed two of them.
+  The Phase 2 voiceprints scored ≥0.79 within each voice and ≤0.23 across,
+  so diarization is built on them: 1.5 s windows every 0.5 s, chained into
+  turns while consecutive windows stay alike (≥0.6), turns ≥2 s clustered by
+  average linkage (merge ≥0.5), shorter turns joined to the voice they
+  match (≥0.5) or their neighbour in time, voices under 2 s folded in and
+  under 5 s joined to their closest voice at ≥0.3 (a hesitant "Uh, so…"
+  start of a turn printed off and became its own speaker before that).
+  Bonus: call-side speakers live in the same space as people.json.
+- **Results:** the three-voice fixture splits perfectly (every line to the
+  right speaker); your real call (one remote person) stays one speaker; the
+  8-minute call side diarizes in ~1 s.
+- **Labels:** a speaker matching a known voice (≥0.5) takes its name; two or
+  more unknown voices become Speaker A, B, … by who spoke first; a single
+  unknown voice stays "Them". Lines the turns do not cover (short
+  backchannels) go by their own voiceprint, else the nearest turn ≤3 s.
+- **Proof:** `prove:meeting` has a three-person call: You / Speaker A /
+  Speaker B / Speaker C / Speaker A / You, all four echoes hidden by voice.
+- **Open:** not yet on a real multi-person call; overlapping speech (two
+  people at once) lands with whoever dominates the window; a segment that
+  spans two speakers keeps one label (the one it overlaps most).
+
 ## Phase 4 — name people after the meeting, remember them
 
 - Deck "Who was this?" card per unknown/uncertain cluster: play clip,

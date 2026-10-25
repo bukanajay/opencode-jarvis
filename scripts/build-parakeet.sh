@@ -116,7 +116,7 @@ MAPS=(-Xcc -fmodule-map-file="$S/FastClusterWrapper/include/module.modulemap" -X
 
 if [[ "$SPM_OK" != "1" ]]; then
   swiftc -O -swift-version 5 -suppress-warnings -target "$TARGET" -I "$OUT" "${MAPS[@]}" \
-    "$PKG/src/main.swift" "$PKG/src/meeting.swift" "$PKG/src/whisper.swift" "$PKG/src/voice.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
+    "$PKG/src/main.swift" "$PKG/src/meeting.swift" "$PKG/src/whisper.swift" "$PKG/src/voice.swift" "$PKG/src/diarize.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
     ${WHISPER[@]+"${WHISPER[@]}"} -lc++ "${PLIST[@]}" -o "$BIN"
   codesign --force -s - -i dev.jarvis.parakeet -r="designated => identifier \"dev.jarvis.parakeet\"" "$BIN"
   echo "parakeet: built with swiftc (FluidAudio $FA_TAG) -> $BIN"

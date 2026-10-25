@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { micVoice, voicesFile } from "./voices.js";
+import { listVoices, micVoice, SAME_VOICE, voicesFile, ME } from "./voices.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PARAKEET_BIN = path.join(here, "../../audio-parakeet/bin/parakeet");
@@ -131,12 +131,84 @@ export function transcriptText(segs) {
   return segs.map((s) => `[${clock(s.start)}] ${s.speaker}: ${s.text}`).join("\n");
 }
 
+// Phase 3: after the meeting, `parakeet --diarize` splits the call side into
+// speakers (turns + one voiceprint and clip each); this puts names on them.
+const cos = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+
+// Which speaker said each call-side line: the speaker whose turns overlap it
+// most; else the one its own voiceprint matches; else the nearest turn.
+// Speakers matching a known voice take its name; with two or more unknown
+// voices they become Speaker A, B, …; a single unknown stays "Them".
+export function assignSpeakers(segs, { turns = [], speakers = [] }, people = []) {
+  const firstTurn = (id) => turns.find((t) => t.speaker === id)?.start ?? Infinity;
+  const ordered = [...speakers].sort((a, b) => firstTurn(a.id) - firstTurn(b.id));
+  const named = ordered.map((sp) => {
+    const best = (sp.voices ?? []).filter((v) => v.id !== ME).sort((a, b) => b.score - a.score)[0];
+    const person = best && best.score >= SAME_VOICE ? people.find((p) => p.id === best.id) : null;
+    return { ...sp, match: person ? { id: person.id, name: person.name, score: best.score } : null };
+  });
+  const unknown = named.filter((sp) => !sp.match);
+  for (const sp of named) {
+    sp.label = sp.match ? sp.match.name : unknown.length >= 2 ? `Speaker ${String.fromCharCode(65 + unknown.indexOf(sp))}` : speakerFor("system");
+  }
+  const byId = new Map(named.map((sp) => [sp.id, sp]));
+  const who = new Map();
+  for (const seg of segs) {
+    if (seg.stream !== "system" || !named.length) continue;
+    const dur = Math.max(0.01, seg.end - seg.start);
+    const overlap = new Map();
+    for (const t of turns) {
+      const o = Math.min(seg.end, t.end) - Math.max(seg.start, t.start);
+      if (o > 0) overlap.set(t.speaker, (overlap.get(t.speaker) ?? 0) + o);
+    }
+    let id = [...overlap].sort((a, b) => b[1] - a[1])[0];
+    id = id && (id[1] >= 0.5 || id[1] >= 0.3 * dur) ? id[0] : null;
+    if (!id && seg.print) {
+      const best = named.filter((sp) => sp.print).map((sp) => [sp.id, cos(seg.print, sp.print)]).sort((a, b) => b[1] - a[1])[0];
+      if (best && best[1] >= SAME_VOICE) id = best[0];
+    }
+    if (!id) {
+      const near = turns.map((t) => [t.speaker, Math.max(0, t.start - seg.end, seg.start - t.end)]).sort((a, b) => a[1] - b[1])[0];
+      if (near && near[1] <= 3) id = near[0];
+    }
+    if (id && byId.has(id)) who.set(seg.id, byId.get(id));
+  }
+  return { speakers: named, who };
+}
+
+export function diarizeMeeting(dir, { bin = PARAKEET_BIN, voices = voicesFile() } = {}) {
+  return new Promise((resolve) => {
+    const args = ["--diarize", dir];
+    if (voices && existsSync(voices)) args.push("--voices", voices);
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const out = { turns: [], speakers: [] };
+    let buf = "";
+    let error = null;
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.kind === "turns") out.turns = msg.turns ?? [];
+        else if (msg.kind === "speaker") out.speakers.push(msg);
+        else if (msg.kind === "status" && msg.state !== "diarized") error = `${msg.state}${msg.note ? ` — ${msg.note}` : ""}`;
+      }
+    });
+    child.stderr.on("data", () => {});
+    child.on("error", (err) => resolve({ error: `diarize spawn failed: ${err.message}` }));
+    child.on("close", (code) => resolve(code === 0 && !error ? out : { error: error ?? `diarize exited with code ${code}` }));
+  });
+}
+
 let active = null;
 export const isMeetingActive = () => active !== null;
 export const activeMeeting = () => (active ? { id: active.id, dir: active.dir, startedAt: active.meta.startedAt, route: active.meta.route } : null);
 
 // onEvent({ type: "segment" | "partial" | "status" | "stopped", ... })
-export function startMeeting({ apps = [], engine = "parakeet", model = whisperModel(), voices = voicesFile(), bin = PARAKEET_BIN, root = meetingsRoot(), replay, onEvent = () => {}, now = new Date() } = {}) {
+export function startMeeting({ apps = [], engine = "parakeet", model = whisperModel(), voices = voicesFile(), bin = PARAKEET_BIN, root = meetingsRoot(), replay, diarize = true, onEvent = () => {}, now = new Date() } = {}) {
   if (active) throw new Error("meeting already running");
   if (!ENGINES[engine]) throw new Error(`unknown speech engine: ${engine}`);
   if (!existsSync(bin)) throw new Error("meeting mode needs the live parakeet helper: npm run build:parakeet");
@@ -158,8 +230,32 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
   const m = { id, dir, meta, child, log, done, stopping: false };
   active = m;
 
-  const finish = (error) => {
-    if (meta.status !== "recording") return;
+  let finishing = false;
+  const finish = async (error) => {
+    if (meta.status !== "recording" || finishing) return;
+    finishing = true;
+    // Who was who on the call side, before the transcript is written.
+    if (!error && diarize && log.all().some((s) => s.stream === "system" && !s.echo)) {
+      onEvent({ type: "status", meetingId: id, state: "diarizing", note: "telling the other speakers apart" });
+      const d = await diarizeMeeting(dir, { bin, voices });
+      if (d.error) meta.diarizeError = d.error;
+      else {
+        const people = existsSync(voices ?? "") ? listVoices(voices) : [];
+        const { speakers, who } = assignSpeakers(log.all(), d, people);
+        for (const seg of log.all()) {
+          const sp = who.get(seg.id);
+          if (!sp) continue;
+          seg.speakerId = sp.id;
+          if (seg.speaker !== sp.label) {
+            seg.speaker = sp.label;
+            const { print, ...shown } = seg;
+            if (!seg.echo) onEvent({ type: "segment", meetingId: id, segment: shown });
+          }
+        }
+        writeFileSync(path.join(dir, "speakers.json"), JSON.stringify(speakers)); // with voiceprints, for naming them later
+        meta.speakers = speakers.map(({ print, voices: v, kind, ...sp }) => ({ ...sp, clip: sp.clip ? path.relative(dir, sp.clip) : null }));
+      }
+    }
     meta.endedAt = new Date().toISOString();
     meta.status = error ? "failed" : "done";
     meta.error = error ?? null;
@@ -167,7 +263,7 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
     writeFileSync(path.join(dir, "transcript.jsonl"), clean.map((s) => JSON.stringify(s)).join("\n") + (clean.length ? "\n" : ""));
     writeMeta();
     if (active === m) active = null;
-    const summary = { id, dir, status: meta.status, error: meta.error, seconds: meta.seconds, segments: log.transcript().length };
+    const summary = { id, dir, status: meta.status, error: meta.error, seconds: meta.seconds, segments: log.transcript().length, speakers: meta.speakers?.length ?? 0 };
     onEvent({ type: "stopped", ...summary });
     settle(summary);
   };

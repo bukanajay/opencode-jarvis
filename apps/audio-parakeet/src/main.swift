@@ -347,6 +347,7 @@ final class Listener: @unchecked Sendable {
 if args.contains("--meeting") { runMeeting() }
 if let i = args.firstIndex(of: "--embed") { runEmbed(Array(args[(i + 1)...])) }
 if args.contains("--enroll") { runEnroll() }
+if args.contains("--diarize") { runDiarize() }
 
 let listener = Listener()
 
