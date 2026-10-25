@@ -429,6 +429,38 @@ panel in place.
 Done when: second meeting with the same people labels them by name with no
 prompts.
 
+### Phase 4 status (2026-10-25)
+
+Built: `rememberVoice` / `renameVoice` / `mergeVoices` / `bestVoice` in
+`voices.js`; `speakersToName`, `nameSpeaker`, `identifySpeakers` and a
+shared `applyDiarization` in `meeting.js`; IPC `meeting.speakers|clip|
+nameSpeaker|nextToName`, `voices.rename|merge`; deck "Who was on this
+call?" card (clip ▶, a line they said, name box with known people) shown
+when a meeting with unknown voices stops, "Name voices from recent
+meetings" and a "People Jarvis knows" list (rename, forget) in Settings → You.
+
+- **Naming** stores the speaker's call voiceprint under the name: the same
+  name twice builds one person (samples capped at 50, oldest dropped), your
+  own voice cannot be named, merge joins two entries. This meeting is
+  relabelled at once, and every other saved meeting where that voice is
+  still unnamed is relabelled too; speakers you named stay named (renames
+  carry through). Only voices you name or confirm add samples: automatic
+  matches never feed the profile, so a wrong match cannot drift it.
+- **Unsure matches** (0.35–0.5) read "Ravi?" and the card asks to confirm.
+  Asked about: unknown or unsure voices with a clip and ≥3 s of speech.
+- **Older meetings:** `identifySpeakers(id)` runs the Phase 3 split on a
+  saved meeting (transcript rebuilt from `segments.jsonl`); the deck button
+  does that for your last ten meetings and opens the card for the newest
+  with voices left. Run on the first real call (2026-10-25-1756): one
+  speaker, 29.5 s, clip saved, waiting for a name.
+- **Proof (real models):** after naming the three-person panel (A → Daniel,
+  B → Moira, C → Aman), a new meeting with the same voices in a new order
+  comes out as Moira / Aman / You / Daniel with nothing left to ask.
+- **Not done:** calendar attendees as name suggestions (the Calendar
+  connector runs through the brain, not Main); naming "Someone else" lines
+  from your own mic (they are not clustered yet); a split for a voice that
+  turns out to be two people.
+
 ## Phase 5 — discuss and act
 
 - Meeting becomes brain context on request: "Jarvis, let's go over the

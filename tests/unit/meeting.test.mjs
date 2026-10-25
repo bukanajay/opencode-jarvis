@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import os from "node:os";
 import path from "node:path";
 import {
-  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
+  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -210,6 +210,62 @@ test("stopMeeting: the call side is told apart before the transcript is written"
   assert.deepEqual(got.speakers.map((s) => [s.id, s.label]), [["S1", "Speaker A"], ["S2", "Speaker B"]]);
   assert.equal(JSON.stringify(got.speakers).includes("print"), false, "voiceprints only in speakers.json");
   assert.equal(JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))[0].print.length, 256);
+});
+
+test("assignSpeakers: a close-but-unsure match reads as a question", () => {
+  const { speakers } = assignSpeakers([], { turns: [{ speaker: "S1", start: 0, end: 4 }], speakers: [{ id: "S1", voices: [{ id: "p-ravi", score: 0.42 }] }] }, [{ id: "p-ravi", name: "Ravi" }]);
+  assert.equal(speakers[0].label, "Ravi?");
+  assert.equal(speakers[0].match.uncertain, true);
+});
+
+// A finished meeting with two unknown call-side voices, through the real
+// stop path and a fake helper.
+async function meetingWithVoices(root, voices, prints, now) {
+  const bin = fakeHelper({
+    lines: [{ kind: "segment", stream: "system", id: "s2", text: "And the migration needs one more review.", start: 16, end: 19, micDb: -120, systemDb: -15, micVoiced: 0, systemVoiced: 0.8 }],
+    diarized: {
+      turns: [{ speaker: "S1", start: 3.7, end: 10.9 }, { speaker: "S2", start: 15.8, end: 19.2 }],
+      speakers: [
+        { id: "S1", seconds: 7.2, turns: 1, print: prints[0], voices: [], clip: "/x/S1.wav" },
+        { id: "S2", seconds: 2.4, turns: 1, print: prints[1], voices: [], clip: "/x/S2.wav" },
+      ],
+    },
+  });
+  const m = startMeeting({ bin, root, voices, now });
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await stopMeeting();
+  return { m, r };
+}
+
+test("nameSpeaker: remembered, this meeting relabelled, and an older one with the same voice", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const voices = path.join(root, "people.json");
+  const P = (i) => Array.from({ length: 256 }, (_, k) => (k === i ? 1 : 0));
+  const first = await meetingWithVoices(root, voices, [P(1), P(2)], new Date(2026, 9, 25, 9, 0));
+  const second = await meetingWithVoices(root, voices, [P(2), P(5)], new Date(2026, 9, 26, 9, 0));
+  assert.equal(second.r.toName, 1, "only S1 has enough speech to be worth asking about");
+
+  const ask = speakersToName(getMeeting(second.m.id, root));
+  assert.deepEqual(ask.map((s) => [s.id, s.label, s.said]), [["S1", "Speaker A", GOOD_EVENING]]);
+
+  // In the second meeting, S1 is the voice that was S2 in the first.
+  const r = nameSpeaker(second.m.id, "S1", { name: "Moira" }, { root, voices });
+  assert.equal(r.person.name, "Moira");
+  assert.deepEqual(r.meeting.transcript.map((s) => s.speaker), ["Moira", "You", "Speaker B"]);
+  assert.deepEqual(speakersToName(r.meeting), [], "named speakers are not asked about again");
+  const older = getMeeting(first.m.id, root);
+  assert.deepEqual(older.transcript.map((s) => s.speaker), ["Speaker A", "You", "Moira"], "the same voice in the older meeting");
+  assert.equal(older.speakers.find((s) => s.id === "S2").named, undefined, "matched, not confirmed by you");
+  assert.equal(r.relabelled, 2);
+
+  // Renaming the person carries through on the next relabel; a named speaker
+  // in a meeting keeps the person even if a closer voice appears later.
+  const { renameVoice } = await import("../../apps/main/src/voices.js");
+  renameVoice(r.person.id, "Moira K", voices);
+  const again = nameSpeaker(first.m.id, "S1", { name: "Daniel" }, { root, voices });
+  assert.deepEqual(again.meeting.transcript.map((s) => s.speaker), ["Daniel", "You", "Moira K"]);
+  assert.deepEqual(getMeeting(second.m.id, root).transcript.map((s) => s.speaker), ["Moira K", "You", "Speaker B"]);
+  assert.throws(() => nameSpeaker(first.m.id, "S9", { name: "X" }, { root, voices }), /no voiceprint/);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {

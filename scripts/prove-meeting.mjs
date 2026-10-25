@@ -19,7 +19,7 @@ if (process.platform !== "darwin" || process.arch !== "arm64") {
   process.exit(0);
 }
 if (!existsSync(BIN)) throw new Error("no live binary: run npm run build:parakeet");
-const { startMeeting, stopMeeting, getMeeting, whisperModel, SOMEONE_ELSE } = await import("../apps/main/src/meeting.js");
+const { startMeeting, stopMeeting, getMeeting, whisperModel, SOMEONE_ELSE, nameSpeaker, speakersToName } = await import("../apps/main/src/meeting.js");
 const { recordEnrollment, setMyVoice } = await import("../apps/main/src/voices.js");
 
 const RATE = 16000;
@@ -87,6 +87,15 @@ const PANEL = [
   { who: "Speaker C", stream: "system", voice: "Aman", text: "I can take that review today, I already read the schema changes." },
   { who: "Speaker A", stream: "system", voice: "Daniel", text: "Great, then we are on track for Thursday." },
   { who: "You", stream: "mic", voice: "Samantha", text: "Perfect, thanks everyone." },
+];
+
+// Phase 4: after naming the panel, a later meeting with the same people (new
+// lines, new order) must come out with their names and nothing to ask.
+const PANEL_AGAIN = [
+  { who: "Moira", stream: "system", voice: "Moira", text: "Quick update, the migration review is done and approved." },
+  { who: "Aman", stream: "system", voice: "Aman", text: "I also added the missing index on the orders table." },
+  { who: "You", stream: "mic", voice: "Samantha", text: "Nice, that unblocks the rollout." },
+  { who: "Daniel", stream: "system", voice: "Daniel", text: "Then I will start the deployment this afternoon." },
 ];
 
 async function enrollSamantha() {
@@ -158,6 +167,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH, voices = null
     if (!existsSync(path.join(got.dir, f))) throw new Error(`missing ${f}`);
   }
   console.log("files-ok: mic.wav system.wav meta.json transcript.jsonl segments.jsonl");
+  return got;
 }
 
 try {
@@ -165,7 +175,17 @@ try {
   await run(-12);
   const samantha = await enrollSamantha();
   await run(-12, { lines: VOICES, voices: samantha });
-  await run(-12, { lines: PANEL, voices: samantha });
+  const panel = await run(-12, { lines: PANEL, voices: samantha });
+  // Name them the way you would from the deck: by the voice you hear.
+  const ask = speakersToName(panel);
+  const byLabel = { "Speaker A": "Daniel", "Speaker B": "Moira", "Speaker C": "Aman" };
+  if (ask.map((s) => s.label).join() !== "Speaker A,Speaker B,Speaker C") throw new Error(`asked about ${ask.map((s) => s.label)}`);
+  for (const sp of ask) nameSpeaker(panel.id, sp.id, { name: byLabel[sp.label] }, { root: path.join(dir, "meetings"), voices: samantha });
+  console.log(`named-ok: ${ask.map((s) => `${s.label} → ${byLabel[s.label]}`).join(", ")}`);
+  const again = await run(-12, { lines: PANEL_AGAIN, voices: samantha });
+  const left = speakersToName(again);
+  if (left.length) throw new Error(`still asking about ${left.map((s) => s.label)}`);
+  console.log("remembered-ok: the next meeting knew everyone by voice");
   if (existsSync(whisperModel())) await run(-12, { engine: "whisper", lines: HINDI });
   else console.log("skip whisper: no model (npm run fetch:whisper-model)");
 } finally {

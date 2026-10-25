@@ -1,11 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, clipboard, shell as electronShell } from "electron";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES } from "./meeting.js";
-import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice } from "./voices.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers } from "./meeting.js";
+import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice, renameVoice, mergeVoices } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
@@ -1302,6 +1303,37 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("voices.stop", async () => stopEnrollment());
   ipcMain.handle("voices.forget", async (_e, { id } = {}) => forgetVoice(String(id ?? "")));
+  ipcMain.handle("voices.rename", async (_e, { id, name } = {}) => renameVoice(String(id ?? ""), name));
+  ipcMain.handle("voices.merge", async (_e, { from, into } = {}) => mergeVoices(String(from ?? ""), String(into ?? "")));
+  // Phase 4: after a meeting, name the voices Jarvis did not know.
+  ipcMain.handle("meeting.speakers", async (_e, { id } = {}) => {
+    const m = getMeeting(id);
+    return { speakers: m.speakers ?? [], toName: speakersToName(m), people: listVoices().filter((p) => !p.isMe) };
+  });
+  // The newest of your last ten meetings with voices still to name; meetings
+  // recorded before speakers were told apart get that done first.
+  ipcMain.handle("meeting.nextToName", async () => {
+    for (const m of listMeetings().filter((x) => x.status === "done").slice(0, 10)) {
+      try {
+        const full = m.speakers ? getMeeting(m.id) : await identifySpeakers(m.id);
+        if (speakersToName(full).length) return { ok: true, id: m.id, startedAt: m.startedAt };
+      } catch {}
+    }
+    return { ok: false, reason: "every voice in your recent meetings has a name" };
+  });
+  ipcMain.handle("meeting.clip", async (_e, { id, speakerId } = {}) => {
+    if (!/^[\w-]+$/.test(String(id)) || !/^S\d+$/.test(String(speakerId))) throw new Error("bad clip");
+    const file = path.join(meetingsRoot(), id, "speakers", `${speakerId}.wav`);
+    return `data:audio/wav;base64,${readFileSync(file).toString("base64")}`;
+  });
+  ipcMain.handle("meeting.nameSpeaker", async (_e, { id, speakerId, name, personId } = {}) => {
+    try {
+      const r = nameSpeaker(String(id ?? ""), String(speakerId ?? ""), { name, personId });
+      return { ok: true, person: r.person, relabelled: r.relabelled, transcript: r.meeting.transcript };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    }
+  });
   ipcMain.handle("meeting.state", async () => ({ active: activeMeeting() }));
   ipcMain.handle("meeting.list", async () => listMeetings());
   ipcMain.handle("meeting.get", async (_e, { id } = {}) => getMeeting(id));
