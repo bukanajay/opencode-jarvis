@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting } from "./meeting.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
@@ -210,7 +211,7 @@ let speakToken = 0;
 // force: say it even with voice mode off (the brief you asked for, from the menu bar).
 let speechMuted = 0; // >0 while handling a Slack message: the Mac stays quiet
 async function speak(win, text, { force = false } = {}) {
-  if (speechMuted > 0) return;
+  if (speechMuted > 0 || isMeetingActive()) return; // never talk over a call
   const t = String(text ?? "").trim();
   if (!t || (!force && !isVoiceMode(shellStore()))) return;
   const my = ++speakToken;
@@ -268,7 +269,7 @@ async function voiceLoop(commitText, win) {
   let failures = 0;
   try {
     while (isVoiceMode(shellStore())) {
-      if (voiceSuspend || isListening()) { await sleep(500); continue; }
+      if (voiceSuspend || isListening() || isMeetingActive()) { await sleep(500); continue; }
       let fin;
       try {
         loopListening = true;
@@ -1020,7 +1021,7 @@ async function createWindow() {
   wireWindow(win); // closing hides; Jarvis keeps running in the menu bar
 }
 
-app.on("will-quit", () => stopVoice());
+app.on("will-quit", () => { stopVoice(); if (isMeetingActive()) stopMeeting({ graceMs: 2000 }); });
 
 app.whenReady().then(async () => {
   if (isVoiceMode(shellStore())) warmVoice(shellStore().settings.voice)?.catch(() => {});
@@ -1224,6 +1225,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("chain.action", async (_e, { action, chainID } = {}) => chainAction(action, chainID, broadcast));
   ipcMain.handle("audio.start", async (_e, { simulate, engine } = {}) => {
+    if (isMeetingActive()) return { ok: false, reason: "meeting-running" };
     if (isListening()) return { ok: false, reason: "already-listening" };
     voiceSuspend = true;
     const partials = [];
@@ -1249,6 +1251,26 @@ app.whenReady().then(async () => {
       voiceSuspend = false;
     }
   });
+  // Meeting mode: one long capture of both sides of a call (meeting.js).
+  // The mic belongs to the meeting while it runs: the voice loop waits and
+  // Jarvis stays quiet.
+  ipcMain.handle("meeting.start", async (_e, { apps } = {}) => {
+    if (isMeetingActive()) return { ok: false, reason: "meeting already running" };
+    if (isListening()) stopListening();
+    try {
+      const m = startMeeting({
+        apps: Array.isArray(apps) ? apps.filter((a) => typeof a === "string" && /^[\w.-]+$/.test(a)) : [],
+        onEvent: (ev) => win?.webContents.send("meeting.event", ev),
+      });
+      return { ok: true, id: m.id, dir: m.dir };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    }
+  });
+  ipcMain.handle("meeting.stop", async () => stopMeeting());
+  ipcMain.handle("meeting.state", async () => ({ active: activeMeeting() }));
+  ipcMain.handle("meeting.list", async () => listMeetings());
+  ipcMain.handle("meeting.get", async (_e, { id } = {}) => getMeeting(id));
   ipcMain.handle("audio.stop", async () => {
     voiceSuspend = false;
     stopListening();

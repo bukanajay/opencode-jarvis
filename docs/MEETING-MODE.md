@@ -184,6 +184,67 @@ clear "recording" indicator.
 Done when: a real 10-min Zoom call gives a transcript with correct
 You/Them labels and both WAVs on disk.
 
+### Phase 1 status (2026-10-25)
+
+Built: `parakeet --meeting` (`src/meeting.swift`; `helper.swift` became
+`main.swift` so the target can have two files), `apps/main/src/meeting.js`,
+IPC `meeting.start|stop|state|list|get` + `meeting.event`, deck Meeting
+button and live panel, `tests/unit/meeting.test.mjs`,
+`npm run prove:meeting` (real model, You/Them/You, echo at −30 and −12 dB).
+
+What changed from the plan:
+
+- **Permission, solved for every launcher.** Live meeting mode re-execs
+  itself with `responsibility_spawnattrs_setdisclaim`, and the binary
+  carries its own `Info.plist` (`apps/audio-parakeet/Info.plist`, linked into
+  `__TEXT,__info_plist`, signed `-i dev.jarvis.parakeet`). macOS then asks
+  for System Audio Recording and Microphone *for parakeet*, whether Jarvis
+  runs from a terminal, the LaunchAgent or a packaged app. Verified from a
+  plain shell (which got silent zeros in Phase 0).
+- **Parakeet fails on hot audio.** Tapped call audio peaks near 0 dBFS; for
+  whole utterances Parakeet then returned an empty string or different
+  words, depending on exactly where the clip was cut (10/10 failing clips
+  fixed by −12 dB). `padded()` now scales any clip that peaks above −10 dBFS
+  to a −10 dBFS peak (all modes; mic speech is quieter and passes untouched).
+- **Echo handling (Phase 0 finding 9), first cut in Main:** text dedupe
+  (≥60% of a mic segment's words said on the system stream within ±1.5 s)
+  and a level rule (call playing ≥60% of the segment, mic ≥25 dB quieter,
+  not on headphones/bluetooth). Live on built-in speakers at ~50% the echo
+  reached the mic only ~9 dB below the call and transcribed verbatim, so the
+  level rule alone would miss it; the text rule caught it. Echo segments
+  stay in `segments.jsonl` (flagged) and drop out of `transcript.jsonl`.
+  Real AEC is still open (only needed if your own speech gets lost when you
+  talk over someone, the text rule can't separate that).
+- **The system stream's VAD never fired live.** A process tap hands over
+  ~10 ms per callback, less than one 20 ms VAD frame, and the VAD only
+  looked at whole frames inside each chunk, so the call side produced no
+  segments at all (replay fed 100 ms chunks and hid it). The VAD now walks
+  the listener's buffer across chunk boundaries (one-shot mode was also
+  skipping ~6% of mic frames this way), and replay feeds the system track in
+  10 ms pieces so `prove:meeting` covers it.
+- **Grants survive rebuilds.** The default ad-hoc designated requirement is
+  the code hash, so every rebuild lost the Microphone grant (and a grant
+  switched on in Settings for an older build reads as *denied*). Signed with
+  `-r='designated => identifier "dev.jarvis.parakeet"'`.
+- **Live, verified (built-in speakers ~50%, global tap, nobody talking):**
+  `Them` gets the call's sentence, the mic's verbatim echo copy (60 ms later,
+  ~10 dB below the call) is hidden by the text rule, transcript has one line.
+  Mic trails system by 28–46 ms across runs: the shared clock holds.
+- **"All system audio" hears everything playing on the Mac.** Another app's
+  audio running straight into the call's speech became one utterance that
+  Parakeet garbled (each half alone transcribes fine). The deck defaults to
+  All (works with any call app) and remembers the last pick; tapping the
+  call app is the cleaner choice.
+- **Not yet handled:** short noise after speech sometimes becomes one or two
+  invented foreign words ("jedinę", "Ich gehe"). Candidates: drop segments
+  under ~1 s with a low voiced share, or a language hint once FluidAudio
+  exposes one.
+- Not yet verified: a real Teams/Zoom/Meet call with a person talking,
+  tapping a single app (`--app`) whose helper process appears mid-call (the
+  retarget path), the deck panel inside Electron, and a 60-minute run
+  (memory stays flat by design: listeners trim to the current utterance,
+  WAVs stream to disk).
+
 ## Phase 2 — voice enrollment (your profile)
 
 **Helper: `parakeet --enroll <out.json>`** (and `--embed <wav>` for tests).

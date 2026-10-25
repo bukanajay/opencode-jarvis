@@ -260,6 +260,21 @@
   button.icon svg { width: 17px; height: 17px; }
   button.icon.live { box-shadow: 0 0 18px rgba(200, 240, 74, 0.45); animation: micbreathe 1.6s ease-in-out infinite; }
   #voice.on { background: var(--accent); color: #0a0d05; }
+  #meet.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #meeting { display: none; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 12px; margin-bottom: 8px; }
+  #meeting.setup, #meeting.on { display: block; }
+  #meeting .mt-head, #mt-lines { display: none; }
+  #meeting.on .mt-head { display: flex; }
+  #meeting.on #mt-lines { display: grid; }
+  #meeting.on #mt-setup { display: none; }
+  .mt-head { gap: 8px; align-items: center; font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+  .mt-head .rec { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: mtblink 1.4s ease-in-out infinite; }
+  .mt-head #mt-stop { margin-left: auto; font-size: 11px; padding: 3px 9px; }
+  @keyframes mtblink { 50% { opacity: 0.25; } }
+  #mt-lines { max-height: 240px; overflow: auto; gap: 4px; margin-top: 8px; font-size: 13.5px; line-height: 1.45; }
+  #mt-lines .who { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin-right: 6px; }
+  #mt-lines .you .who { color: var(--accent); }
+  #mt-lines .partial { opacity: 0.55; }
   @keyframes micbreathe { 0%, 100% { box-shadow: 0 0 10px rgba(200, 240, 74, 0.3); } 50% { box-shadow: 0 0 26px rgba(200, 240, 74, 0.6); } }
   #mic { min-width: 76px; }
   /* Voice focus: voice mode hides the transcript so the ring and Jarvis take
@@ -338,6 +353,16 @@
     </section>
     <section class="chat">
       <h2>Transcript <button type="button" class="ghost" id="chat-hide" title="Hide the transcript and give the deck to Jarvis">Hide</button></h2>
+      <div id="meeting" aria-live="polite">
+        <div class="row" id="mt-setup">
+          <select id="mt-app" aria-label="Call app"></select>
+          <button type="button" id="mt-go">Start meeting</button>
+          <button type="button" class="ghost" id="mt-cancel">Cancel</button>
+          <span class="res">Stays on this Mac. Tell everyone on the call it is being transcribed.</span>
+        </div>
+        <div class="mt-head"><span class="rec"></span><span id="mt-status">recording</span><span id="mt-clock"></span><button type="button" class="ghost" id="mt-stop">Stop</button></div>
+        <div id="mt-lines"></div>
+      </div>
       <div id="log" aria-live="polite"></div>
       <div id="working" aria-hidden="true"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></div>
       <div id="caption" aria-live="polite"></div>
@@ -347,6 +372,7 @@
         <button type="submit">Send</button>
         <button type="button" class="ghost icon" id="mic" title="Push to talk" aria-label="Microphone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg></button>
         <button type="button" class="ghost icon" id="voice" title="Voice mode: keep listening for the wake word" aria-label="Voice mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-7 3 14 3-10 2 3h5"/></svg></button>
+        <button type="button" class="ghost icon" id="meet" title="Meeting mode: transcribe a call on this Mac" aria-label="Meeting mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2z"/><path d="M3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg></button>
       </form>
       <div id="staged" class="res" style="display:none;margin-top:6px;"></div>
       <datalist id="cmds"></datalist>
@@ -1284,6 +1310,95 @@
       paintVoice(settings);
     }
   });
+  // Meeting mode: a live two-sided transcript of a call on this Mac. Main owns
+  // the capture (meeting.js); this only paints segments as they arrive.
+  const MEETING_APPS = [["", "All system audio"], ["com.microsoft.teams2", "Teams"], ["us.zoom.xos", "Zoom"],
+    ["com.google.Chrome", "Chrome (Meet)"], ["net.whatsapp.WhatsApp", "WhatsApp"]];
+  $("mt-app").innerHTML = "";
+  for (const [v, label] of MEETING_APPS) $("mt-app").add(new Option(label, v));
+  // "All system audio" works with any call app but also hears anything else
+  // playing; tapping just the call app is cleaner. Remember the last pick.
+  try { const last = localStorage.getItem("jarvis.meetingApp"); if (last != null && MEETING_APPS.some(([v]) => v === last)) $("mt-app").value = last; } catch {}
+  let meetingClock = null;
+  const mtPartial = new Map(); // stream -> row showing what is being said now
+  function paintMeeting(mode, startedAt) {
+    $("meeting").className = mode;
+    $("meet").classList.toggle("on", mode === "on");
+    clearInterval(meetingClock);
+    if (mode === "on") {
+      const t0 = startedAt ? Date.parse(startedAt) : Date.now();
+      const tick = () => {
+        const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
+        $("mt-clock").textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+      };
+      tick();
+      meetingClock = setInterval(tick, 1000);
+    }
+  }
+  function mtRow(id, speaker, text, partial) {
+    const row = document.createElement("div");
+    row.className = (speaker === "You" ? "you" : "them") + (partial ? " partial" : "");
+    if (id) row.dataset.id = id;
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = speaker;
+    row.append(who, document.createTextNode(text));
+    return row;
+  }
+  function mtPlace(row, stream) {
+    const lines = $("mt-lines");
+    const stick = lines.scrollTop + lines.clientHeight >= lines.scrollHeight - 8;
+    const p = mtPartial.get(stream);
+    if (p && !row.classList.contains("partial")) { p.remove(); mtPartial.delete(stream); }
+    const firstPartial = lines.querySelector(".partial");
+    if (row.classList.contains("partial") || !firstPartial) lines.appendChild(row);
+    else lines.insertBefore(row, firstPartial);
+    if (stick) lines.scrollTop = lines.scrollHeight;
+  }
+  window.jarvis?.onMeeting?.((ev) => {
+    if (ev.type === "segment") {
+      const seg = ev.segment;
+      const old = $("mt-lines").querySelector(`[data-id="${CSS.escape(seg.id)}"]`);
+      if (seg.echo) { old?.remove(); return; } // the mic heard the call through the speakers
+      const row = mtRow(seg.id, seg.speaker, seg.text, false);
+      if (old) old.replaceWith(row); else mtPlace(row, seg.stream);
+    } else if (ev.type === "partial") {
+      if (!ev.text) return;
+      const cur = mtPartial.get(ev.stream);
+      const row = mtRow(null, ev.speaker, ev.text, true);
+      if (cur) cur.replaceWith(row); else mtPlace(row, ev.stream);
+      mtPartial.set(ev.stream, row);
+    } else if (ev.type === "status") {
+      if (ev.state === "listening") $("mt-status").textContent = `recording${ev.route && ev.route !== "replay" ? ` · ${ev.route}` : ""}`;
+      else if (ev.state === "system-audio-denied") addSys("Meeting: the call app is playing but Jarvis hears silence. Allow System Audio Recording for parakeet in System Settings → Privacy & Security.", { bad: true });
+    } else if (ev.type === "stopped") {
+      paintMeeting("");
+      for (const p of mtPartial.values()) p.remove();
+      mtPartial.clear();
+      if (ev.status === "failed") addSys(`Meeting stopped: ${ev.error}`, { bad: true });
+      else addSys(`Meeting saved: ${ev.segments} line${ev.segments === 1 ? "" : "s"}, ${Math.round(ev.seconds ?? 0)} s · ${ev.dir}`);
+    }
+  });
+  $("meet").onclick = async () => {
+    if ($("meet").classList.contains("on")) { $("mt-stop").click(); return; }
+    paintMeeting($("meeting").classList.contains("setup") ? "" : "setup");
+  };
+  $("mt-cancel").onclick = () => paintMeeting("");
+  $("mt-go").onclick = async () => {
+    const app = $("mt-app").value;
+    try { localStorage.setItem("jarvis.meetingApp", app); } catch {}
+    $("mt-lines").innerHTML = "";
+    const r = await window.jarvis.meetingStart(app ? [app] : []);
+    if (!r.ok) { paintMeeting(""); addSys(`Meeting did not start: ${r.reason}`, { bad: true }); return; }
+    $("mt-status").textContent = "starting";
+    paintMeeting("on");
+  };
+  $("mt-stop").onclick = async () => {
+    $("mt-status").textContent = "saving";
+    await window.jarvis.meetingStop();
+  };
+  window.jarvis?.meetingState?.().then(({ active }) => { if (active) { $("mt-status").textContent = "recording"; paintMeeting("on", active.startedAt); } });
+
   $("voice").onclick = async () => {
     const cur = $("voice").classList.contains("on");
     await window.jarvis.appCommand("set.voiceMode", { value: cur ? "off" : "on" });

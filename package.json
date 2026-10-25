@@ -28,6 +28,7 @@
     "build:audio": "mkdir -p apps/audio-speech-analyzer/bin apps/audio-parakeet/bin && swiftc -O apps/audio-speech-analyzer/src/helper.swift -o apps/audio-speech-analyzer/bin/speech-analyzer && swiftc -O apps/audio-parakeet/src/sim.swift -o apps/audio-parakeet/bin/parakeet-sim",
     "build:parakeet": "bash scripts/build-parakeet.sh && apps/audio-parakeet/bin/parakeet --prepare && apps/audio-voice/bin/jarvis-voice --prepare",
     "prove:parakeet": "node scripts/prove-parakeet.mjs",
+    "prove:meeting": "node scripts/prove-meeting.mjs",
     "prove:jarvis-voice": "node scripts/prove-jarvis-voice.mjs",
     "eval:brain": "node scripts/eval-brain.mjs",
     "prove:audio": "node scripts/prove-audio.mjs",

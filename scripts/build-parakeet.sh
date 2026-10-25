@@ -42,6 +42,7 @@ mkdir -p "$VOICE/bin"
 SPM_OK=0
 if [[ "${PARAKEET_MANUAL:-0}" != "1" ]] && (cd "$PKG" && swift build -c release) ; then
   cp "$PKG/.build/release/parakeet" "$BIN"
+  codesign --force -s - -i dev.jarvis.parakeet -r="designated => identifier \"dev.jarvis.parakeet\"" "$BIN"
   echo "parakeet: built with SwiftPM -> $BIN"
   SPM_OK=1
 else
@@ -78,12 +79,19 @@ if [[ ! -f "$OUT/libFluidAudio.a" ]]; then
     "${FILES[@]}"
 fi
 
+# Meeting mode disclaims responsibility, so macOS reads the usage strings from
+# the binary itself: embed Info.plist and sign with its bundle id. The explicit
+# designated requirement keeps the Microphone / System Audio grants across
+# rebuilds (an ad-hoc default is the code hash, which every build changes).
+PLIST=(-Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PKG/Info.plist")
+
 MAPS=(-Xcc -fmodule-map-file="$S/FastClusterWrapper/include/module.modulemap" -Xcc -fmodule-map-file="$OUT/mts/module.modulemap")
 
 if [[ "$SPM_OK" != "1" ]]; then
   swiftc -O -swift-version 5 -suppress-warnings -target "$TARGET" -I "$OUT" "${MAPS[@]}" \
-    "$PKG/src/helper.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
-    -lc++ -o "$BIN"
+    "$PKG/src/main.swift" "$PKG/src/meeting.swift" "$OUT/libFluidAudio.a" "$OUT/MachTaskSelf.o" "$OUT/FastCluster.o" \
+    -lc++ "${PLIST[@]}" -o "$BIN"
+  codesign --force -s - -i dev.jarvis.parakeet -r="designated => identifier \"dev.jarvis.parakeet\"" "$BIN"
   echo "parakeet: built with swiftc (FluidAudio $FA_TAG) -> $BIN"
 fi
 

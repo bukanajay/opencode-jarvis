@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded into bin/parakeet (__TEXT,__info_plist). Meeting mode disclaims
+     responsibility, so macOS asks for these on behalf of parakeet itself. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>dev.jarvis.parakeet</string>
+  <key>CFBundleName</key><string>Jarvis Listener</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Jarvis meeting mode transcribes the other side of your call, on this Mac only.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Jarvis hears your side of the conversation, on this Mac only.</string>
+</dict>
+</plist>
