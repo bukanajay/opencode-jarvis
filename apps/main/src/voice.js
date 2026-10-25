@@ -2,6 +2,17 @@
 // no mic, no model. Main decides; these only classify transcripts.
 const ATTN = "(?:hey|ok|okay)\\s+";
 
+// Whisper writes Marathi (and sometimes Hindi) in Devanagari, so "hey
+// Jarvis" can arrive as "हे जार्विस". The Devanagari spellings of the wake
+// word and of hey / ok become Latin before any matching (JS \b only sees
+// Latin letters).
+// A pattern, not a list: Whisper writes it जार्विस, जारविस, जार्व्हिस, and run
+// together with "hey" as हिजार विस.
+const DEV_WAKE = /(?:(हे|हेय|हाय|हि|ही|ओके)[\s,]*)?ज[ाॉ]?र्?\s?व(?:्ह)?[िी]?[सजश](?![\u0900-\u097F])/g;
+export function latinWake(text) {
+  return String(text ?? "").replace(DEV_WAKE, (_m, attn) => `${attn ? (attn.startsWith("ओ") ? "ok" : "hey") + " " : ""}jarvis`);
+}
+
 function escapeRegExp(s) {
   return String(s ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -39,6 +50,7 @@ export function isVoiceMode(shellStore) {
 // short replies like "okay" / "yes" are answers, never filler.
 export function nextVoiceAction(transcript, { voiceMode, wakeWord, inConversation = false, answering = false } = {}) {
   if (voiceMode !== "on") return { action: "ignored" };
+  transcript = latinWake(transcript);
   const wake = String(wakeWord ?? "jarvis").trim() || "jarvis";
   const woke = hasWake(transcript, wake);
   if (!woke && !inConversation) return { action: "ignored" };

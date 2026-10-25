@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin", "set.meetingPrompt", "set.meetingAudioDays"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin", "set.meetingPrompt", "set.meetingAudioDays", "set.listenLanguage"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -20,7 +20,14 @@ export const VOICES = [
   "am_michael", "am_onyx", "am_fenrir", "am_puck", "am_adam", "am_echo", "am_eric", "am_liam",
   "bf_emma", "bf_isabella", "bf_alice", "bf_lily",
   "af_heart", "af_bella", "af_nicole", "af_sarah", "af_nova", "af_sky",
+  // Hindi voices: also speak Marathi (with Marathi pronunciation) and Indian English.
+  "hm_omega", "hm_psi", "hf_alpha", "hf_beta",
 ];
+export const HINDI_VOICES = ["hm_omega", "hm_psi", "hf_alpha", "hf_beta"];
+// The language you talk to Jarvis in (voice mode): en = Parakeet; hi =
+// Whisper Apex (Hindi / Hinglish, romanized); mr = multilingual Whisper
+// (Marathi, Devanagari). Replies and Jarvis's voice follow it.
+export const LISTEN_LANGUAGES = ["en", "hi", "mr"];
 export const VOICE_LABELS = {
   bm_george: "George — British, male", bm_fable: "Fable — British, male", bm_lewis: "Lewis — British, male", bm_daniel: "Daniel — British, male",
   am_michael: "Michael — American, male", am_onyx: "Onyx — American, male", am_fenrir: "Fenrir — American, male", am_puck: "Puck — American, male",
@@ -28,6 +35,8 @@ export const VOICE_LABELS = {
   bf_emma: "Emma — British, female", bf_isabella: "Isabella — British, female", bf_alice: "Alice — British, female", bf_lily: "Lily — British, female",
   af_heart: "Heart — American, female", af_bella: "Bella — American, female", af_nicole: "Nicole — American, female",
   af_sarah: "Sarah — American, female", af_nova: "Nova — American, female", af_sky: "Sky — American, female",
+  hm_omega: "Omega — Hindi / Marathi, male", hm_psi: "Psi — Hindi / Marathi, male",
+  hf_alpha: "Alpha — Hindi / Marathi, female", hf_beta: "Beta — Hindi / Marathi, female",
 };
 // Conversation follow-up window after "hey jarvis", in seconds; off = always need the wake word.
 export const FOLLOW_UPS = ["off", "15", "30", "60", "120"];
@@ -59,6 +68,7 @@ export const DEFAULTS = {
   launchAtLogin: "off", // start Jarvis (menu bar, window hidden) when you log in
   meetingPrompt: "on", // offer meeting mode when a call app starts using the mic (never starts on its own)
   meetingAudioDays: "forever",
+  listenLanguage: "en",
 };
 
 export function storePath() {
@@ -137,6 +147,9 @@ function validate(name, args) {
     case "set.reviewMode":
     case "set.meetingPrompt":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.listenLanguage":
+      if (!LISTEN_LANGUAGES.includes(value)) throw new Error(`${name}: want ${LISTEN_LANGUAGES.join("|")}`);
       break;
     case "set.meetingAudioDays":
       if (!MEETING_AUDIO_DAYS.includes(value)) throw new Error(`${name}: want ${MEETING_AUDIO_DAYS.join("|")}`);

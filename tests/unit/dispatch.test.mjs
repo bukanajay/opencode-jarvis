@@ -76,3 +76,13 @@ test("buildThinkPrompt: lists memories and fleet agents", () => {
   assert.match(p, /reviewer \(Reviews code\)/);
   assert.match(p, /User: review it$/);
 });
+
+test("buildThinkPrompt: Hindi / Marathi voice turns ask for that language and a Devanagari speak line", async () => {
+  const { buildThinkPrompt } = await import("../../apps/main/src/brain/brain.js");
+  const mr = buildThinkPrompt("आजचा प्लॅन सांग", [], [], null, { voice: true, language: "mr" });
+  assert.match(mr, /reply in Marathi\. Write the speak line in Marathi in Devanagari script/);
+  const hi = buildThinkPrompt("aaj ka plan batao", [], [], null, { voice: true, language: "hi" });
+  assert.match(hi, /speak line in Hindi in Devanagari script/);
+  assert.doesNotMatch(buildThinkPrompt("hi", [], [], null, { voice: true, language: "en" }), /Devanagari/);
+  assert.doesNotMatch(buildThinkPrompt("hi", [], [], null, { voice: false, language: "mr" }), /Devanagari/, "typed turns are not spoken");
+});

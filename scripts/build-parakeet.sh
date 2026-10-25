@@ -83,6 +83,18 @@ if [[ ! -d "$FA" ]]; then
 fi
 S="$FA/Sources"
 OUT="$WORK/out-$FA_TAG"
+
+# Jarvis patches to FluidAudio (patches/fluidaudio-*.patch), applied once:
+# `git apply --check` only passes while a patch is not in yet. A newly
+# applied patch to the TTS sources forces that library to rebuild.
+for p in "$ROOT"/patches/fluidaudio-*.patch; do
+  [[ -f "$p" ]] || continue
+  if git -C "$FA" apply --check "$p" 2>/dev/null; then
+    git -C "$FA" apply "$p"
+    echo "parakeet: applied $(basename "$p")" >&2
+    rm -f "$OUT/libFluidAudioTTS.a"
+  fi
+done
 TARGET="arm64-apple-macosx15.0"
 
 if [[ ! -f "$OUT/libFluidAudio.a" ]]; then

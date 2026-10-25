@@ -3,6 +3,10 @@
 // plays the bytes. One voice, fixed by the shell `voice` setting, so it never
 // changes between turns. Without the helper (Intel) the deck falls back to the
 // system voice, pinned by name.
+//
+// Devanagari (Hindi / Marathi replies) is sounded out with eSpeak's Hindi or
+// Marathi rules (patches/fluidaudio-devanagari-g2p.patch); `devanagari` picks
+// which, and is part of the helper's identity (it is read at start).
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +16,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const VOICE_BIN = path.join(here, "../../audio-voice/bin/jarvis-voice");
 
 let child = null;
-let childVoice = null;
+let childVoice = null; // "<voice>|<devanagari>"
 let ready = null;
 let buf = "";
 const waiting = new Map(); // id -> { resolve, reject, timer }
@@ -34,11 +38,11 @@ export function stopVoice() {
   settleAll(new Error("voice stopped"));
 }
 
-function start(voice, bin) {
+function start(voice, devanagari, bin) {
   stopVoice();
-  const proc = spawn(bin, ["--voice", voice], { stdio: ["pipe", "pipe", "ignore"] });
+  const proc = spawn(bin, ["--voice", voice], { stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, FLUIDAUDIO_DEVANAGARI_VOICE: devanagari } });
   child = proc;
-  childVoice = voice;
+  childVoice = `${voice}|${devanagari}`;
   buf = "";
   ready = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("voice warm-up timeout")), 300000);
@@ -69,17 +73,19 @@ function start(voice, bin) {
 }
 
 // Warm the helper ahead of the first reply (voice mode on, app start).
-export function warmVoice(voice, bin = VOICE_BIN) {
+export function warmVoice(voice, opts = {}) {
+  // warmVoice(voice, bin) is the older form; still accepted.
+  const { devanagari = "hi", bin = VOICE_BIN } = typeof opts === "string" ? { bin: opts } : opts;
   if (!hasNeuralVoice(bin)) return null;
-  if (!child || childVoice !== voice) start(voice, bin);
+  if (!child || childVoice !== `${voice}|${devanagari}`) start(voice, devanagari, bin);
   return ready;
 }
 
 let seq = 0;
 // Resolves { audio: Buffer (WAV), ms } or null when no neural voice exists.
-export async function synthesize(text, voice, { bin = VOICE_BIN, timeoutMs = 30000 } = {}) {
+export async function synthesize(text, voice, { devanagari = "hi", bin = VOICE_BIN, timeoutMs = 30000 } = {}) {
   if (!hasNeuralVoice(bin)) return null;
-  await warmVoice(voice, bin);
+  await warmVoice(voice, { devanagari, bin });
   const id = `s${Date.now().toString(36)}${(seq++).toString(36)}`;
   const out = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { waiting.delete(id); reject(new Error("voice timeout")); }, timeoutMs);

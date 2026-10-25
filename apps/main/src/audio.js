@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PARAKEET_LIVE = path.join(here, "../../audio-parakeet/bin/parakeet");
@@ -17,6 +18,22 @@ export const ENGINES = {
   // The live binary (npm run build:parakeet) wins; the sim covers Intel and CI.
   parakeet: { bin: existsSync(PARAKEET_LIVE) ? PARAKEET_LIVE : PARAKEET_SIM, label: "parakeet-v3" },
 };
+
+// Talking to Jarvis in Hindi or Marathi (setting listenLanguage): the same
+// parakeet helper, with Whisper instead of Parakeet. Hindi: Oriserve Apex
+// (Hindi / Hinglish, written romanized); Marathi: multilingual Whisper
+// large-v3-turbo (written in Devanagari). Fetched by scripts/fetch-whisper-model.sh.
+export const LANGUAGE_MODELS = {
+  hi: { file: "ggml-apex-hinglish-q8_0.bin", fetch: "npm run fetch:whisper-model" },
+  mr: { file: "ggml-large-v3-turbo-q8_0.bin", fetch: "npm run fetch:whisper-model -- multilingual" },
+};
+export function languageArgs(language, { modelsDir = path.join(os.homedir(), ".config", "jarvis", "models"), exists = existsSync } = {}) {
+  const m = LANGUAGE_MODELS[language];
+  if (!m) return [];
+  const file = path.join(modelsDir, m.file);
+  if (!exists(file)) throw new Error(`audio:unavailable — ${language === "mr" ? "Marathi" : "Hindi"} needs a speech model: ${m.fetch}`);
+  return ["--engine", "whisper", "--model", file, "--language", language];
+}
 
 export function defaultEngine({ platform = process.platform, arch = process.arch, hasParakeet = existsSync(PARAKEET_LIVE) } = {}) {
   return platform === "darwin" && arch === "arm64" && hasParakeet ? "parakeet" : "speech-analyzer";
@@ -44,12 +61,16 @@ export function stopListening() {
 
 // onPartial({ id, text, revision }) — renderer replaces caption, never appends.
 // Resolves { id, text } on final. Rejects on mic/speech denial or timeout.
-export function listenOnce({ onPartial, simulate, replay, timeoutMs = 90000, engine } = {}) {
+export function listenOnce({ onPartial, simulate, replay, timeoutMs = 90000, engine, language = "en" } = {}) {
   stopListening();
   const eng = resolveEngine(engine);
+  let lang = [];
+  if (eng.key === "parakeet" && eng.bin === PARAKEET_LIVE && !simulate) {
+    try { lang = languageArgs(language); } catch (err) { return Promise.reject(err); }
+  }
   return new Promise((resolve, reject) => {
     // replay: parakeet streams an audio file through its live VAD path (proofs).
-    const args = simulate ? ["--simulate", simulate] : replay ? ["--replay", replay] : [];
+    const args = [...(simulate ? ["--simulate", simulate] : replay ? ["--replay", replay] : []), ...lang];
     const child = spawn(eng.bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     active = child;
     const done = (fn, val) => {

@@ -336,6 +336,7 @@ final class Listener: @unchecked Sendable {
                     return
                 }
                 emit(["kind": "final", "id": id, "text": text])
+                asr.shutdown() // Whisper must release its Metal buffers before exit
                 exit(0)
             }
         }
@@ -350,6 +351,15 @@ final class Listener: @unchecked Sendable {
         }
         settle()
     }
+}
+
+// Voice mode (one-shot) in Hindi or Marathi: Whisper instead of Parakeet.
+//   --engine whisper --model GGML --language hi|mr   (whisper.swift)
+func loadOneShotASR() async throws -> (Transcriber, String) {
+    guard argValues("--engine").first == "whisper" else { return (Transcriber(try await loadASR()), engineNote) }
+    let model = argValues("--model").first ?? ""
+    guard FileManager.default.fileExists(atPath: model) else { throw MeetingError("whisper model not found: \(model)") }
+    return try loadWhisper(model: model, language: argValues("--language").first ?? "hi")
 }
 
 if args.contains("--meeting") { runMeeting() }
@@ -369,10 +379,10 @@ if let idx = args.firstIndex(of: "--replay"), idx + 1 < args.count {
     catch { fail("unavailable", "cannot read \(args[idx + 1]): \(error)", code: 1) }
     Task {
         do {
-            let asr = try await loadASR()
+            let (asr, note) = try await loadOneShotASR()
             listener.q.async {
-                listener.asr = Transcriber(asr)
-                emit(["kind": "status", "state": "listening", "note": engineNote + " (replay)"])
+                listener.asr = asr
+                emit(["kind": "status", "state": "listening", "note": note + " (replay)"])
             }
             let chunk = sampleRate / 10
             let stream = [Float](repeating: 0, count: sampleRate / 2) + samples
@@ -444,10 +454,10 @@ do {
 
 Task {
     do {
-        let asr = try await loadASR()
+        let (asr, note) = try await loadOneShotASR()
         listener.q.async {
-            listener.asr = Transcriber(asr)
-            emit(["kind": "status", "state": "listening", "note": engineNote])
+            listener.asr = asr
+            emit(["kind": "status", "state": "listening", "note": note])
             listener.tick()
         }
     } catch {

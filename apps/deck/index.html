@@ -577,6 +577,10 @@
   <details id="voice-settings" open>
     <summary>Voice</summary>
     <div class="body">
+    <p><label class="res">I talk to Jarvis in<br /><select id="set-listenLanguage" style="width:100%">
+      <option value="en">English</option><option value="hi">Hindi / Hinglish</option><option value="mr">Marathi</option>
+    </select></label></p>
+    <p class="res" id="lang-note"></p>
     <p><label class="res">Jarvis's voice<br /><select id="set-voice" style="width:100%"></select></label></p>
     <p class="row"><button class="ghost" id="voice-play" type="button">Play sample</button></p>
     <p><label class="res">After “hey <span id="wake-name">jarvis</span>”, keep listening for<br /><select id="set-followUp" style="width:100%"></select></label></p>
@@ -1365,7 +1369,7 @@
   window.jarvis?.onConversation?.(({ open }) => { conversing = !!open; paintVoiceStatus(); });
   window.jarvis?.onSpeakStop?.(() => stopSpeaking());
   window.jarvis?.onSettings(({ entry, settings }) => {
-    if (/^set\.(voice|followUp|wake)\b/.test(entry.what)) paintVoiceSettings(settings);
+    if (/^set\.(voice|followUp|wake|listenLanguage)\b/.test(entry.what)) paintVoiceSettings(settings);
     if (/^set\.userName\b/.test(entry.what)) paintProfile(settings);
     if (/^set\.(voiceMode|autoMode|defaultAgent|wake)\b/.test(entry.what)) {
       if (settings.defaultAgent) defaultAgent = settings.defaultAgent;
@@ -1872,6 +1876,11 @@
   let voiceMeta = null;
   const FOLLOW_UP_LABEL = { off: "Off — always say the wake word", 15: "15 seconds", 30: "30 seconds", 60: "1 minute", 120: "2 minutes" };
   function paintVoiceSettings(cur) {
+    // Hindi / Marathi: replies come back in that language, spoken by a Hindi
+    // voice (yours if you picked one, else Omega).
+    const lang = cur?.listenLanguage ?? "en";
+    $("set-listenLanguage").value = lang;
+    $("lang-note").textContent = lang === "en" ? "" : `Jarvis answers in ${lang === "mr" ? "Marathi" : "Hindi"} and speaks with ${/^h[mf]_/.test(cur?.voice ?? "") ? "your voice below" : "Omega (pick another Hindi / Marathi voice below)"}.`;
     if (!voiceMeta) return;
     const vsel = $("set-voice");
     if (!vsel.options.length) {
@@ -1924,6 +1933,7 @@
       playVoiceSample(voice);
     } catch (err) { $("voice-note").textContent = `rejected: ${err.message ?? err}`; loadVoiceSettings(); }
   };
+  $("set-listenLanguage").onchange = (e) => window.jarvis.appCommand("set.listenLanguage", { value: e.target.value });
   $("voice-play").onclick = () => playVoiceSample($("set-voice").value);
   $("set-followUp").onchange = async (e) => {
     try {

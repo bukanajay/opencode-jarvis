@@ -70,3 +70,16 @@ test("followUpMs + follow-up phrases", () => {
   assert.deepEqual(matchAppCommand("set follow up to 60 seconds"), { name: "set.followUp", args: { value: "60" } });
   assert.equal(matchAppCommand("keep listening for 7 seconds"), null);
 });
+
+test("latinWake: Devanagari 'hey Jarvis' (Hindi / Marathi via Whisper) wakes Jarvis", async () => {
+  const { latinWake, nextVoiceAction } = await import("../../apps/main/src/voice.js");
+  assert.equal(latinWake("हे जार्विस, आजचा प्लॅन सांग"), "hey jarvis, आजचा प्लॅन सांग");
+  assert.equal(latinWake("ओके जारविस थांब"), "ok jarvis थांब");
+  assert.equal(latinWake("जार्व्हिस"), "jarvis");
+  assert.equal(latinWake("हिजार विस आजच्या मिटिंचा साराश सांग"), "hey jarvis आजच्या मिटिंचा साराश सांग", "as Whisper heard Jarvis's own Marathi voice");
+  assert.equal(latinWake("जरा विचार कर"), "जरा विचार कर", "जरा (a little) is not Jarvis");
+  assert.equal(latinWake("Hey Jarvis, what's up"), "Hey Jarvis, what's up", "Latin untouched");
+  const r = nextVoiceAction("हे जार्विस, आजच्या मीटिंगचा सारांश सांग", { voiceMode: "on", wakeWord: "jarvis" });
+  assert.deepEqual(r, { action: "wake-task", text: "आजच्या मीटिंगचा सारांश सांग" });
+  assert.equal(nextVoiceAction("आजच्या मीटिंगचा सारांश सांग", { voiceMode: "on", wakeWord: "jarvis" }).action, "ignored", "no wake word, no turn");
+});

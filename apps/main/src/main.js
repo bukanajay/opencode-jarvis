@@ -11,7 +11,7 @@ import { callStep, initialCallState, snooze } from "./calls.js";
 import { spawn as spawnChild } from "node:child_process";
 import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice, renameVoice, mergeVoices } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
-import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
+import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS, HINDI_VOICES } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
 import { createChief } from "./chief.js";
 import { decide, classify, learn, loadPolicy, savePolicy, countAuto, makeRule, isTightening, autonomySummary, logDecision, recentDecisions, CLASSES, PRESETS, NEVER_AUTO, effectiveMode } from "./policy.js";
@@ -29,7 +29,7 @@ import { chains, loadChains, createChainWorktree, bindChain, landChain, keepChai
 import { applyAgentFile, stageWidening, confirmWidening, pendingConfigs } from "./config.js";
 import { termStart, termOutput, termKill, ptyOpen, ptyResize, ptyClose, ptyAttach, ptyWrite, ptyDetach, ptyDetachAll } from "./terminal.js";
 import { pendingForms, refreshForms, replyForm, matchFormAnswer, formsFor } from "./forms.js";
-import { isVoiceMode, nextVoiceAction, stripWake, createConversation, followUpMs } from "./voice.js";
+import { isVoiceMode, nextVoiceAction, stripWake, createConversation, followUpMs, latinWake } from "./voice.js";
 import { speechFor, voiceGate, isHush, permissionLine } from "./speech.js";
 import { synthesize, warmVoice, stopVoice, hasNeuralVoice } from "./tts.js";
 import { ensureFleetOrAsk, startCreate, startCreateWithPurpose, answerCreate, pendingBootstraps } from "./bootstrap.js";
@@ -215,21 +215,30 @@ function paintConversation(win = convoWin) {
 let speakToken = 0;
 // force: say it even with voice mode off (the brief you asked for, from the menu bar).
 let speechMuted = 0; // >0 while handling a Slack message: the Mac stays quiet
+// Who speaks, and with which rules for Devanagari. In English, your chosen
+// voice. In Hindi or Marathi, your voice if it is one of the Hindi voices,
+// else Omega: the English voices cannot carry Indian speech.
+function speechVoice(settings = shellStore().settings, chosen = settings.voice) {
+  const lang = settings.listenLanguage ?? "en";
+  const voice = lang === "en" || HINDI_VOICES.includes(chosen) ? chosen : "hm_omega";
+  return { voice, devanagari: lang === "mr" ? "mr" : "hi" };
+}
+
 async function speak(win, text, { force = false } = {}) {
   if (speechMuted > 0 || isMeetingActive()) return; // never talk over a call
   const t = String(text ?? "").trim();
   if (!t || (!force && !isVoiceMode(shellStore()))) return;
   const my = ++speakToken;
-  const voice = shellStore().settings.voice;
+  const sv = speechVoice();
   let rendered = null;
   try {
-    rendered = await synthesize(t, voice);
+    rendered = await synthesize(t, sv.voice, { devanagari: sv.devanagari });
   } catch (err) {
     console.warn(`[voice] ${err.message ?? err}; deck falls back to the system voice`);
   }
   // A hush, a newer line or voice-off while rendering wins.
   if (my !== speakToken || (!force && !isVoiceMode(shellStore()))) return;
-  win?.webContents.send("jarvis.speak", { text: t, voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0, force });
+  win?.webContents.send("jarvis.speak", { text: t, voice: sv.voice, audio: rendered?.audio ?? null, ms: rendered?.ms ?? 0, force });
 }
 function hush(win) {
   speakToken++;
@@ -252,9 +261,13 @@ function pruneMeetingAudioNow() {
 function onVoiceSettings(name, value) {
   if (name === "set.meetingAudioDays") pruneMeetingAudioNow();
   const s = shellStore().settings;
-  if (name === "set.voice" && s.voiceMode === "on") warmVoice(value)?.catch(() => {});
+  const sv = speechVoice(s);
+  if ((name === "set.voice" || name === "set.listenLanguage") && s.voiceMode === "on") warmVoice(sv.voice, { devanagari: sv.devanagari })?.catch(() => {});
+  // The listen already waiting was started in the old language: restart it
+  // so the very next thing you say is heard in the new one.
+  if (name === "set.listenLanguage" && loopListening) stopListening();
   if (name === "set.voiceMode") {
-    if (value === "on") warmVoice(s.voice)?.catch(() => {});
+    if (value === "on") warmVoice(sv.voice, { devanagari: sv.devanagari })?.catch(() => {});
     else stopVoice();
   }
 }
@@ -292,7 +305,7 @@ async function voiceLoop(commitText, win) {
       let fin;
       try {
         loopListening = true;
-        fin = await listenOnce({ onPartial: (p) => win?.webContents.send("caption.partial", p) });
+        fin = await listenOnce({ language: shellStore().settings.listenLanguage, onPartial: (p) => win?.webContents.send("caption.partial", p) });
         failures = 0;
       } catch (err) {
         // Nobody spoke for a whole listen window, or the listen was restarted: listen again.
@@ -308,6 +321,7 @@ async function voiceLoop(commitText, win) {
       const s = shellStore().settings;
       // While Jarvis talks the mic hears it too: drop that, but let an
       // explicit "hey jarvis …" cut in (and "hey jarvis stop" just hushes).
+      fin.text = latinWake(fin.text); // "हे जार्विस" -> "hey jarvis" (Hindi / Marathi)
       const gate = voiceGate(fin.text, { speaking: isSpeaking(), wakeWord: s.wake });
       if (gate === "drop") continue;
       if (gate === "barge") {
@@ -1026,7 +1040,7 @@ async function reviewWorker(ev, broadcast) {
     kind: "worker.report",
     report: { sessionID: report.sessionID, agent: report.agent, round: report.round, status: report.status, headline: reportHeadline(report), files: report.files, branch: report.worktree?.branch ?? null },
   });
-  const r = await brainReview(report, say, { voice: isVoiceMode(shellStore()) });
+  const r = await brainReview(report, say, { voice: isVoiceMode(shellStore()), language: shellStore().settings.listenLanguage });
   win?.webContents.send("session.done", { modelUsed: r.modelUsed, status: r.status });
   if (r.status === "ok") speak(win, r.speak);
   for (const warn of r.warnings ?? []) say(`[review] ${warn}\n`);
@@ -1066,7 +1080,7 @@ async function createWindow() {
 app.on("will-quit", () => { stopVoice(); if (isMeetingActive()) stopMeeting({ graceMs: 2000 }); });
 
 app.whenReady().then(async () => {
-  if (isVoiceMode(shellStore())) warmVoice(shellStore().settings.voice)?.catch(() => {});
+  if (isVoiceMode(shellStore())) { const sv = speechVoice(); warmVoice(sv.voice, { devanagari: sv.devanagari })?.catch(() => {}); }
   await ensureClient();
   setProject(projectDir());
   await loadProject(projectDir());
@@ -1191,7 +1205,7 @@ app.whenReady().then(async () => {
     }
     const r = await brainRespond(text, (d) => {
       win?.webContents.send("session.stream", { delta: d });
-    }, { voice: isVoiceMode(shellStore()), context: jarvisContext() + meetingContext(text) }).catch(async (err) => {
+    }, { voice: isVoiceMode(shellStore()), context: jarvisContext() + meetingContext(text), language: shellStore().settings.listenLanguage }).catch(async (err) => {
       // Brain fallback: direct read-only turn if the graph path fails. Loud,
       // so a broken brain never hides behind a working fallback.
       console.error("brain failed, falling back to direct turn:", err?.message ?? err);
@@ -1273,6 +1287,7 @@ app.whenReady().then(async () => {
     const partials = [];
     try {
       const fin = await listenOnce({
+        language: shellStore().settings.listenLanguage,
         simulate,
         engine,
         onPartial: (p) => {
@@ -1637,7 +1652,7 @@ app.whenReady().then(async () => {
     const v = VOICES.includes(voice) ? voice : shellStore().settings.voice;
     if (!t) return { ok: false, reason: "empty" };
     try {
-      const r = await synthesize(t, v);
+      const r = await synthesize(t, v, { devanagari: speechVoice().devanagari });
       return r ? { ok: true, text: t, audio: r.audio, ms: r.ms } : { ok: false, text: t, reason: "no neural voice on this Mac" };
     } catch (err) {
       return { ok: false, text: t, reason: String(err.message ?? err) };
@@ -1647,9 +1662,14 @@ app.whenReady().then(async () => {
   // voice mode off; renders through the same helper Jarvis speaks with.
   ipcMain.handle("voice.preview", async (_e, { voice } = {}) => {
     const v = VOICES.includes(voice) ? voice : shellStore().settings.voice;
-    const line = `Hello, I'm Jarvis. ${VOICE_LABELS[v]?.split(" — ")[0] ?? "This"} is how I sound. What shall we build today?`;
+    const name = VOICE_LABELS[v]?.split(" — ")[0] ?? "This";
+    const lang = shellStore().settings.listenLanguage;
+    // Hindi voices preview in the language you talk to Jarvis in.
+    const line = !HINDI_VOICES.includes(v) ? `Hello, I'm Jarvis. ${name} is how I sound. What shall we build today?`
+      : lang === "mr" ? `नमस्कार, मी जार्विस. आज आपण काय करूया?`
+      : `नमस्ते, मैं जार्विस हूँ। आज हम क्या बनाएँ?`;
     try {
-      const r = await synthesize(line, v);
+      const r = await synthesize(line, v, { devanagari: lang === "mr" ? "mr" : "hi" });
       return r ? { ok: true, text: line, audio: r.audio, ms: r.ms } : { ok: false, text: line, reason: "no neural voice on this Mac" };
     } catch (err) {
       return { ok: false, text: line, reason: String(err.message ?? err) };
