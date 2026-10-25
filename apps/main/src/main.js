@@ -1,12 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, clipboard, shell as electronShell } from "electron";
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
-import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers, saveSummary, retranscribeMeeting } from "./meeting.js";
+import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES, speakersToName, nameSpeaker, meetingsRoot, identifySpeakers, saveSummary, retranscribeMeeting, pruneMeetingAudio } from "./meeting.js";
 import { recentMeetingsLine, pickMeeting, meetingContextBlock, summaryPrompt, parseSummary, meetingsBriefLine } from "./meetings-brain.js";
+import { callStep, initialCallState, snooze } from "./calls.js";
+import { spawn as spawnChild } from "node:child_process";
 import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice, renameVoice, mergeVoices } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
@@ -234,7 +236,21 @@ function hush(win) {
   win?.webContents.send("jarvis.speak.stop", {});
 }
 // Keep the voice model warm while voice mode is on; re-warm on a voice change.
+// Meeting audio older than the setting goes (transcripts stay); at startup,
+// every six hours, and right after the setting changes.
+function pruneMeetingAudioNow() {
+  const days = shellStore().settings.meetingAudioDays;
+  if (days === "forever") return;
+  try {
+    const r = pruneMeetingAudio(days);
+    if (r.meetings) console.log(`meeting audio: removed recordings of ${r.meetings} meeting(s) older than ${days} days (${Math.round(r.bytes / 1e6)} MB)`);
+  } catch (err) {
+    console.error("meeting audio prune failed:", err?.message ?? err);
+  }
+}
+
 function onVoiceSettings(name, value) {
+  if (name === "set.meetingAudioDays") pruneMeetingAudioNow();
   const s = shellStore().settings;
   if (name === "set.voice" && s.voiceMode === "on") warmVoice(value)?.catch(() => {});
   if (name === "set.voiceMode") {
@@ -1280,11 +1296,61 @@ app.whenReady().then(async () => {
   // Meeting mode: one long capture of both sides of a call (meeting.js).
   // The mic belongs to the meeting while it runs: the voice loop waits and
   // Jarvis stays quiet.
-  ipcMain.handle("meeting.start", async (_e, { apps, engine } = {}) => {
+  // Phase 6: notice calls. The watcher reports which apps hold the mic;
+  // calls.js turns that into an offer to start (or stop) meeting mode.
+  // Jarvis never starts or stops a recording on its own.
+  let callState = initialCallState();
+  let meetingCallApp = null; // the call app the running meeting was started for
+  let watcher = null, watcherRestarts = 0;
+  const offerCall = (kind, app) => {
+    win?.webContents.send("meeting.offer", { kind, app });
+    const title = kind === "start" ? `${app.name}${app.browser ? " is using your microphone" : " call"}` : `${app.name} call ended`;
+    const body = kind === "start" ? "Start meeting mode to transcribe it? Nothing is recorded unless you say so." : "Stop meeting mode and save the transcript?";
+    if (!win || !win.isVisible() || !win.isFocused()) presence.notify(title, body);
+  };
+  const startCallWatch = () => {
+    const bin = path.join(here, "../../audio-parakeet/bin/parakeet");
+    if (!existsSync(bin) || watcher) return;
+    watcher = spawnChild(bin, ["--watch-calls"], { stdio: ["pipe", "pipe", "ignore"] });
+    let buf = "";
+    watcher.stdout.on("data", (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.kind !== "inputs") continue;
+        const r = callStep(callState, msg.inputs ?? [], { meetingActive: isMeetingActive(), meetingApp: meetingCallApp, enabled: shellStore().settings.meetingPrompt === "on" });
+        callState = r.state;
+        if (r.start) offerCall("start", r.start);
+        if (r.stop) offerCall("stop", r.stop);
+      }
+    });
+    watcher.on("close", () => {
+      watcher = null;
+      if (quitting) return;
+      watcherRestarts += 1;
+      setTimeout(startCallWatch, Math.min(60000, 2000 * watcherRestarts));
+    });
+  };
+  let quitting = false;
+  app.on("before-quit", () => { quitting = true; try { watcher?.stdin.end(); } catch {} });
+  startCallWatch();
+  pruneMeetingAudioNow();
+  setInterval(pruneMeetingAudioNow, 6 * 3600 * 1000).unref?.();
+  ipcMain.handle("meeting.snooze", async (_e, { name } = {}) => {
+    callState = snooze(callState, String(name ?? ""));
+    return { ok: true };
+  });
+
+  ipcMain.handle("meeting.start", async (_e, { apps, engine, callApp } = {}) => {
     if (isMeetingActive()) return { ok: false, reason: "meeting already running" };
     if (isEnrolling()) return { ok: false, reason: "a voice sample is being recorded" };
     if (isListening()) stopListening();
     try {
+      meetingCallApp = typeof callApp === "string" ? callApp.slice(0, 40) : null;
       const m = startMeeting({
         apps: Array.isArray(apps) ? apps.filter((a) => typeof a === "string" && /^[\w.-]+$/.test(a)) : [],
         engine: Object.hasOwn(ENGINES, engine) ? engine : "parakeet",

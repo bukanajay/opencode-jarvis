@@ -537,6 +537,32 @@ a deck **Meetings** section (Summarize / Notes, Discuss, action items with
 - Retention setting (delete WAVs after N days, keep transcript).
 - Live diarized labels via streaming `DiarizerManager`.
 
+### Phase 6 status (2026-10-26)
+
+Built: `parakeet --watch-calls` (which apps hold the microphone, from Core
+Audio's process list: the same source as the menu bar's mic dot, no
+permission needed; Jarvis's own helpers left out), `apps/main/src/calls.js`
+(pure: call apps by bundle id, when that is a call starting or ending),
+the watcher in Main (restarts with backoff), offers in the deck and as a
+notification when the deck is not in front; `pruneMeetingAudio` and the
+`meetingPrompt` / `meetingAudioDays` settings (deck, and by voice).
+
+- **Never records on its own.** A call app (Teams, Zoom, WhatsApp, FaceTime,
+  Webex, Slack; a browser for Meet, offered only when no real call app is)
+  taking the mic opens the meeting setup with that app picked; you press
+  Start. "Not now" holds until that app lets go of the mic. When the app a
+  meeting was started for lets go, Jarvis says the call ended and points at
+  Stop; it does not stop by itself.
+- **Retention:** keep recordings forever (default), 90, 30 or 7 days; older
+  meetings lose `mic.wav`, `system.wav` and the voice clips, keep the
+  transcript, notes and voiceprints (they still read, discuss and recognise
+  people; Redo is gone for them). Runs at startup, every six hours and when
+  the setting changes.
+- **Verified:** the watcher saw a recording take and release the mic
+  (live); offers, snooze, stop and retention are unit-tested. Not yet
+  watched on a real Teams/Zoom call in the deck.
+- **Not done:** live speaker labels during the call (Phase 3 labels at
+  stop is enough so far).
 ## Risks and how the plan handles them
 
 | Risk | Handling |

@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { validateAppCommand } from "../../apps/main/src/shell.js";
 import os from "node:os";
 import path from "node:path";
 import {
-  chooseLine, hindiShare, assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, retranscribeMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
+  chooseLine, hindiShare, assignSpeakers, createMeetingLog, echoVerdict, getMeeting, nameSpeaker, speakersToName, saveSummary, retranscribeMeeting, pruneMeetingAudio, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -370,6 +371,36 @@ test("retranscribeMeeting: new engine replaces the transcript, old one and its n
   assert.equal(readdirSync(m.dir).some((f) => f.startsWith(".redo-")), false, "scratch folder removed");
   assert.equal(JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))[0].clip, "/x/S1.wav", "clip paths outside the scratch folder untouched");
   await assert.rejects(retranscribeMeeting("../x", { root }), /bad meeting id/);
+});
+
+test("pruneMeetingAudio: old meetings lose their recordings, keep transcript and voices", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const voices = path.join(root, "people.json");
+  const P = (i) => Array.from({ length: 256 }, (_, k) => (k === i ? 1 : 0));
+  const { m } = await meetingWithVoices(root, voices, [P(1), P(2)], new Date(2026, 9, 25, 17, 56));
+  for (const f of ["mic.wav", "system.wav"]) writeFileSync(path.join(m.dir, f), Buffer.alloc(1000));
+  mkdirSync(path.join(m.dir, "speakers"), { recursive: true });
+  writeFileSync(path.join(m.dir, "speakers", "S1.wav"), Buffer.alloc(200));
+  const ended = Date.parse(getMeeting(m.id, root).endedAt);
+
+  assert.deepEqual(pruneMeetingAudio("30", { root, now: ended + 29 * 86400000 }), { meetings: 0, bytes: 0 }, "not old enough");
+  assert.deepEqual(pruneMeetingAudio("forever", { root, now: ended + 999 * 86400000 }), { meetings: 0, bytes: 0 });
+  assert.deepEqual(pruneMeetingAudio("30", { root, now: ended + 31 * 86400000 }), { meetings: 1, bytes: 2200 });
+  for (const f of ["mic.wav", "system.wav", "speakers/S1.wav"]) assert.equal(existsSync(path.join(m.dir, f)), false, f);
+  const got = getMeeting(m.id, root);
+  assert.ok(got.audioDeletedAt);
+  assert.equal(got.transcript.length, 3, "the transcript stays");
+  assert.ok(existsSync(path.join(m.dir, "speakers.json")), "voiceprints stay");
+  assert.equal(got.speakers.every((sp) => sp.clip === null), true);
+  assert.deepEqual(pruneMeetingAudio("30", { root, now: ended + 40 * 86400000 }), { meetings: 0, bytes: 0 }, "once");
+  await assert.rejects(retranscribeMeeting(m.id, { root }), /missing/);
+});
+
+test("meeting settings: allowlisted and validated", () => {
+  assert.doesNotThrow(() => validateAppCommand("set.meetingPrompt", { value: "off" }));
+  assert.doesNotThrow(() => validateAppCommand("set.meetingAudioDays", { value: "30" }));
+  assert.throws(() => validateAppCommand("set.meetingAudioDays", { value: "1" }), /forever\|90\|30\|7/);
+  assert.throws(() => validateAppCommand("set.meetingPrompt", { value: "maybe" }), /on\|off/);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {
