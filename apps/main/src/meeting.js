@@ -52,6 +52,9 @@ export function echoVerdict(mic, systemSegs, { route } = {}) {
     const shared = words.filter((w) => heard.has(w)).length / words.length;
     if (shared >= 0.6) return "text";
   }
+  // One word ("Who", "Okay") is too little to share 60% of by chance, so ask
+  // for the same word from the call starting within half a second.
+  if (words.length === 1 && near.some((s) => Math.abs(s.start - mic.start) <= 0.5 && tokens(s.text).join(" ") === words[0])) return "text";
   const leaky = route !== "headphones" && route !== "bluetooth";
   if (leaky && (mic.systemVoiced ?? 0) >= 0.6 && mic.micDb != null && mic.systemDb != null && mic.micDb - mic.systemDb <= -25) return "level";
   return null;

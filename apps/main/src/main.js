@@ -1011,6 +1011,9 @@ async function createWindow() {
     height: 760,
     show: !startHidden(),
     backgroundColor: "#060809",
+    // A click from another app (you are in the call) must press the button,
+    // not just focus the deck: Stop on a meeting was being swallowed.
+    acceptFirstMouse: true,
     webPreferences: {
       preload: path.join(here, "preload.cjs"),
       contextIsolation: true,

@@ -32,6 +32,13 @@ test("echoVerdict: same words much later, or your own words, are not echo", () =
   assert.equal(echoVerdict(seg({ stream: "mic", text: "Great, I will review it after lunch.", start: 4, end: 7 }), sys), null);
 });
 
+test("echoVerdict: a one-word echo needs the same word from the call at the same moment", () => {
+  const sys = [seg({ stream: "system", text: "Who?", start: 456.2, end: 456.6 })];
+  assert.equal(echoVerdict(seg({ stream: "mic", text: "Who", start: 456.3, end: 456.7 }), sys), "text");
+  assert.equal(echoVerdict(seg({ stream: "mic", text: "Who", start: 457.4, end: 457.8 }), sys), null);
+  assert.equal(echoVerdict(seg({ stream: "mic", text: "Okay.", start: 456.3, end: 456.7 }), sys), null);
+});
+
 test("echoVerdict: level rule needs a leaky route and a much quieter mic", () => {
   const quiet = seg({ stream: "mic", text: "uh huh okay", start: 1, end: 3, micDb: -55, systemDb: -15, systemVoiced: 0.9 });
   assert.equal(echoVerdict(quiet, [], { route: "speakers" }), "level");

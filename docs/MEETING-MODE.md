@@ -239,9 +239,27 @@ What changed from the plan:
   invented foreign words ("jedinę", "Ich gehe"). Candidates: drop segments
   under ~1 s with a low voiced share, or a language hint once FluidAudio
   exposes one.
-- Not yet verified: a real Teams/Zoom/Meet call with a person talking,
+- **First real call (2026-10-25, 8 min, Teams-style call, all system
+  audio, built-in speakers, two people).** 34 segments; speaker labels
+  right throughout; the other person's long answers transcribed cleanly;
+  3 verbatim echo copies of their sentences hidden, none of yours. Found:
+  - Stop in the deck was swallowed: Electron windows ignore the first click
+    while another app (the call) is focused. Deck now `acceptFirstMouse`.
+  - A one-word echo ("Who") slipped through (text rule needs ≥2 words).
+    One-word segments now count as echo when the call said the same word
+    within 0.5 s.
+  - **Hindi / Hinglish is not transcribed.** Parakeet TDT v3 covers 25
+    European languages; your code-switched lines came out as nonsense
+    ("test curvath", "share karma"), and short unclear audio sometimes
+    came back as Spanish/Russian ("Y lo que sí", "Ну"). English is solid.
+    Needs a multilingual model (e.g. Whisper large-v3-turbo on device) as
+    an option; decide before Phase 3.
+  - Backchannels ("Mm-hmm", "Okay") from the other side while you talk are
+    real and kept; transcript is ordered by start time, so they sit after
+    your long turn begins.
+- Not yet verified:
   tapping a single app (`--app`) whose helper process appears mid-call (the
-  retarget path), the deck panel inside Electron, and a 60-minute run
+  retarget path), and a 60-minute run
   (memory stays flat by design: listeners trim to the current utterance,
   WAVs stream to disk).
 
