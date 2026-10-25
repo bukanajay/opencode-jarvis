@@ -212,6 +212,14 @@ test("stopMeeting: the call side is told apart before the transcript is written"
   assert.equal(JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))[0].print.length, 256);
 });
 
+test("assignSpeakers: one voice on the call owns every call-side line, even far from its turns", () => {
+  const { who } = assignSpeakers(
+    [{ id: "far", stream: "system", start: 200, end: 201 }, { id: "mine", stream: "mic", start: 200, end: 201 }],
+    { turns: [{ speaker: "S1", start: 352, end: 364 }], speakers: [{ id: "S1", seconds: 12 }] },
+  );
+  assert.deepEqual([...who].map(([k, v]) => `${k}:${v.id}`), ["far:S1"]);
+});
+
 test("assignSpeakers: a close-but-unsure match reads as a question", () => {
   const { speakers } = assignSpeakers([], { turns: [{ speaker: "S1", start: 0, end: 4 }], speakers: [{ id: "S1", voices: [{ id: "p-ravi", score: 0.42 }] }] }, [{ id: "p-ravi", name: "Ravi" }]);
   assert.equal(speakers[0].label, "Ravi?");

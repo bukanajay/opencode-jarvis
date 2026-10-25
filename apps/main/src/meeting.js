@@ -137,6 +137,8 @@ const cos = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 
 // Which speaker said each call-side line: the speaker whose turns overlap it
 // most; else the one its own voiceprint matches; else the nearest turn.
+// With a single voice on the call, every call-side line is theirs (short
+// replies like "Yes sir" fall outside the turns and carry no voiceprint).
 // Speakers matching a known voice take its name ("Ravi?" when it is close but
 // not sure, OTHER_VOICE..SAME_VOICE); with two or more unknown voices they
 // become Speaker A, B, …; a single unknown stays "Them".
@@ -174,6 +176,7 @@ export function assignSpeakers(segs, { turns = [], speakers = [] }, people = [])
       const near = turns.map((t) => [t.speaker, Math.max(0, t.start - seg.end, seg.start - t.end)]).sort((a, b) => a[1] - b[1])[0];
       if (near && near[1] <= 3) id = near[0];
     }
+    if (!id && named.length === 1) id = named[0].id;
     if (id && byId.has(id)) who.set(seg.id, byId.get(id));
   }
   return { speakers: named, who };
@@ -236,6 +239,9 @@ export async function identifySpeakers(id, { root = meetingsRoot(), voices = voi
   const segs = [...new Map(readJsonl(path.join(dir, "segments.jsonl")).map((s) => [s.id, s])).values()];
   const { metaSpeakers } = applyDiarization(dir, segs, d, voices);
   const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+  // People you already named here stay confirmed when the same voice comes back.
+  const confirmed = new Set((meta.speakers ?? []).filter((sp) => sp.named).map((sp) => sp.match?.id));
+  for (const sp of metaSpeakers) if (sp.match && !sp.match.uncertain && confirmed.has(sp.match.id)) sp.named = true;
   meta.speakers = metaSpeakers;
   writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   writeJsonl(path.join(dir, "transcript.jsonl"), segs.filter((s) => !s.echo).sort((a, b) => a.start - b.start).map(({ print, ...s }) => s));

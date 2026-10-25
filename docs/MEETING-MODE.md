@@ -451,8 +451,12 @@ meetings" and a "People Jarvis knows" list (rename, forget) in Settings → You.
 - **Older meetings:** `identifySpeakers(id)` runs the Phase 3 split on a
   saved meeting (transcript rebuilt from `segments.jsonl`); the deck button
   does that for your last ten meetings and opens the card for the newest
-  with voices left. Run on the first real call (2026-10-25-1756): one
-  speaker, 29.5 s, clip saved, waiting for a name.
+  with voices left. On the first real call (2026-10-25-1756) you named the
+  one remote voice Pranshu from the deck; only 4 of his 22 lines took the
+  name at first, because short replies ("Yes sir", "Mm-hmm") fall outside
+  the diarized turns and carry no voiceprint. Now, with a single voice on
+  the call, every call-side line is theirs: re-run, all 22 read Pranshu,
+  and re-identifying a meeting keeps the voices you already confirmed.
 - **Proof (real models):** after naming the three-person panel (A → Daniel,
   B → Moira, C → Aman), a new meeting with the same voices in a new order
   comes out as Moira / Aman / You / Daniel with nothing left to ask.
