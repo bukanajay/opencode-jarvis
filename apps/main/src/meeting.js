@@ -12,6 +12,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { micVoice, voicesFile } from "./voices.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PARAKEET_BIN = path.join(here, "../../audio-parakeet/bin/parakeet");
@@ -45,6 +46,9 @@ function freshDir(root, id) {
 }
 
 export const speakerFor = (stream) => (stream === "mic" ? "You" : "Them");
+// A mic line whose voiceprint is clearly not yours, with no call audio to
+// blame it on: someone next to you.
+export const SOMEONE_ELSE = "Someone else";
 
 const tokens = (text) => String(text ?? "").toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, " ").split(/\s+/).filter(Boolean);
 
@@ -78,6 +82,14 @@ export function createMeetingLog({ route } = {}) {
   const segs = [];
   let currentRoute = route;
   const systemSegs = () => segs.filter((s) => s.stream === "system");
+  // Your voiceprint outranks the word rules: your line is never hidden as
+  // echo, and a print that is clearly someone else while the call was
+  // playing is the call coming back through the speakers.
+  const judgeMic = (m) => {
+    if (m.voice === "me") return null;
+    if (m.voice === "other" && ((m.systemVoiced ?? 0) >= 0.3 || systemSegs().some((s) => s.start <= m.end && s.end >= m.start))) return "voice";
+    return echoVerdict(m, systemSegs(), { route: currentRoute });
+  };
   return {
     setRoute(r) { currentRoute = r; },
     add(raw) {
@@ -85,15 +97,20 @@ export function createMeetingLog({ route } = {}) {
         id: raw.id, stream: raw.stream, speaker: speakerFor(raw.stream), text: raw.text,
         start: raw.start, end: raw.end, micDb: raw.micDb, systemDb: raw.systemDb,
         micVoiced: raw.micVoiced, systemVoiced: raw.systemVoiced, echo: null,
+        ...(raw.voices ? { voices: raw.voices, voiced: raw.voiced } : {}),
+        ...(raw.print ? { print: raw.print } : {}),
       };
       segs.push(seg);
       const changed = [seg];
-      if (seg.stream === "mic") seg.echo = echoVerdict(seg, systemSegs(), { route: currentRoute });
-      else {
+      if (seg.stream === "mic") {
+        seg.voice = micVoice(seg);
+        seg.echo = judgeMic(seg);
+        if (seg.voice === "other" && !seg.echo) seg.speaker = SOMEONE_ELSE;
+      } else {
         for (const m of segs) {
           if (m.stream !== "mic" || m.echo || m.end < seg.start - 1.5 || m.start > seg.end + 1.5) continue;
-          const v = echoVerdict(m, systemSegs(), { route: currentRoute });
-          if (v) { m.echo = v; changed.push(m); }
+          const v = judgeMic(m);
+          if (v) { m.echo = v; m.speaker = speakerFor("mic"); changed.push(m); }
         }
       }
       return changed;
@@ -119,7 +136,7 @@ export const isMeetingActive = () => active !== null;
 export const activeMeeting = () => (active ? { id: active.id, dir: active.dir, startedAt: active.meta.startedAt, route: active.meta.route } : null);
 
 // onEvent({ type: "segment" | "partial" | "status" | "stopped", ... })
-export function startMeeting({ apps = [], engine = "parakeet", model = whisperModel(), bin = PARAKEET_BIN, root = meetingsRoot(), replay, onEvent = () => {}, now = new Date() } = {}) {
+export function startMeeting({ apps = [], engine = "parakeet", model = whisperModel(), voices = voicesFile(), bin = PARAKEET_BIN, root = meetingsRoot(), replay, onEvent = () => {}, now = new Date() } = {}) {
   if (active) throw new Error("meeting already running");
   if (!ENGINES[engine]) throw new Error(`unknown speech engine: ${engine}`);
   if (!existsSync(bin)) throw new Error("meeting mode needs the live parakeet helper: npm run build:parakeet");
@@ -131,6 +148,7 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
 
   const args = ["--meeting", dir, ...apps.flatMap((a) => ["--app", a])];
   if (engine === "whisper") args.push("--engine", "whisper", "--model", model, "--language", ENGINES.whisper.language);
+  if (voices && existsSync(voices)) args.push("--voices", voices);
   if (replay) args.push("--replay-mic", replay.mic, "--replay-system", replay.system);
   const child = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
   const log = createMeetingLog();
@@ -145,7 +163,8 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
     meta.endedAt = new Date().toISOString();
     meta.status = error ? "failed" : "done";
     meta.error = error ?? null;
-    writeFileSync(path.join(dir, "transcript.jsonl"), log.transcript().map((s) => JSON.stringify(s)).join("\n") + (log.transcript().length ? "\n" : ""));
+    const clean = log.transcript().map(({ print, ...s }) => s); // voiceprints stay in segments.jsonl
+    writeFileSync(path.join(dir, "transcript.jsonl"), clean.map((s) => JSON.stringify(s)).join("\n") + (clean.length ? "\n" : ""));
     writeMeta();
     if (active === m) active = null;
     const summary = { id, dir, status: meta.status, error: meta.error, seconds: meta.seconds, segments: log.transcript().length };
@@ -167,7 +186,8 @@ export function startMeeting({ apps = [], engine = "parakeet", model = whisperMo
       if (msg.kind === "segment") {
         for (const seg of log.add(msg)) {
           appendFileSync(segFile, JSON.stringify(seg) + "\n");
-          onEvent({ type: "segment", meetingId: id, segment: { ...seg } }); // a copy: the log may re-judge it later
+          const { print, ...shown } = seg; // a copy without the voiceprint: the log may re-judge it later
+          onEvent({ type: "segment", meetingId: id, segment: shown });
         }
       } else if (msg.kind === "partial") {
         onEvent({ type: "partial", meetingId: id, stream: msg.stream, speaker: speakerFor(msg.stream), id: msg.id, text: msg.text ?? "" });

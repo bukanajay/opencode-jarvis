@@ -331,6 +331,40 @@ clip of the same voice matches and a different voice doesn't.
 Done when: after enrolling, your mic segments match "me" and a second
 person talking into the mic is flagged unknown.
 
+### Phase 2 status (2026-10-25)
+
+Built: `src/voice.swift` (voiceprints: WeSpeaker v2 through FluidAudio's
+`EmbeddingExtractor`, 10 s windows with an energy speech mask, averaged and
+L2-normalised; `--embed` and `--enroll` modes), `apps/main/src/voices.js`
+(people.json, 0600, no vectors leave Main), IPC `voices.list|record|stop|
+forget` + `voices.level`, deck Settings → You → *Teach Jarvis my voice* /
+*Test it* / *Forget my voice*, `tests/unit/voices.test.mjs`, and a
+voiceprint case in `prove:meeting`.
+
+- **Measured on the real call before building on it:** your own lines
+  0.75–0.95 against each other; you vs your colleague 0.03–0.17; you vs the
+  echo of their voice 0.03–0.13. Enrolling from two of your lines, your
+  held-out lines scored 0.81–0.96 and everything else ≤0.16. Thresholds:
+  ≥ 0.5 is you, < 0.35 is someone else, between is undecided. Clips with
+  under ~1–2 s of speech give weak prints, so they get no score.
+- **Enrollment:** ~30 s reading English + Hinglish prompts (how you talk in
+  meetings); 5 s windows with ≥2 s of speech; needs ≥10 s of speech and a
+  mean window-to-window similarity ≥0.6, or it is refused (noise or a
+  second voice). Re-recording replaces the print. Audio is not kept.
+- **In meetings** (`--voices` path passed by Main): every segment gets its
+  voiceprint (kept in `segments.jsonl` for Phase 3/4, never in events or
+  `transcript.jsonl`) and its score against each known voice. Mic lines:
+  your voice is never hidden as echo, even when you repeat their words;
+  not your voice while the call is playing is echo (`echo: "voice"`), and
+  otherwise the line is labelled **Someone else**. Replaying the real call:
+  the 6:38 echo that both word rules missed ("Okay. Which uh will be
+  implemented…", you04) is now hidden by voice; none of your lines are.
+- **Limit seen:** two near-identical synthetic voices (macOS Samantha vs
+  Karen) scored 0.61, over the threshold; other voices, including another
+  woman (Moira), scored 0.12–0.28. Real people on the call were far apart,
+  but very similar voices (siblings?) may need a higher threshold or more
+  enrollment audio.
+
 ## Phase 3 — diarize the other side
 
 - On `stopMeeting`, run `parakeet --diarize <dir>`: `OfflineDiarizerManager`

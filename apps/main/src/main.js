@@ -5,6 +5,7 @@ import { ensureClient } from "./service.js";
 import { promptJarvis, ensureJarvisSession } from "./sessions.js";
 import { listenOnce, toUtterance, isListening, stopListening } from "./audio.js";
 import { startMeeting, stopMeeting, isMeetingActive, activeMeeting, listMeetings, getMeeting, ENGINES } from "./meeting.js";
+import { listVoices, recordEnrollment, stopEnrollment, isEnrolling, setMyVoice, forgetVoice } from "./voices.js";
 import { ensureFleetPump, spawnWorker, followUpWorker, rehydrateWorkers, workers, latestSettledChain, chainBusy, stopWorker, deleteWorker, replyPermission, latestActiveWorker, snapshot, pendingPermissions, routeUtterance, listSessions, renameSession, forkSession, switchSessionAgent, switchSessionModel, listAgents, listModels, listCommands, listSkills, getDiff, listMessages, undoMessage, cleanupWorkers, listProjects, projectIDFor, listWorktrees, createWorktree, removeWorktree, compactSession } from "./fleet.js";
 import { loadStore, applyAppCommand, validateAppCommand, ACCENTS, VOICES, VOICE_LABELS, FOLLOW_UPS } from "./shell.js";
 import { stateBlock, resolveRef } from "./actions.js";
@@ -1259,6 +1260,7 @@ app.whenReady().then(async () => {
   // Jarvis stays quiet.
   ipcMain.handle("meeting.start", async (_e, { apps, engine } = {}) => {
     if (isMeetingActive()) return { ok: false, reason: "meeting already running" };
+    if (isEnrolling()) return { ok: false, reason: "a voice sample is being recorded" };
     if (isListening()) stopListening();
     try {
       const m = startMeeting({
@@ -1272,6 +1274,34 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("meeting.stop", async () => stopMeeting());
+  // Your voiceprint (voices.js): read a few sentences, Jarvis keeps the print.
+  // test: a few seconds, answers how close it is to the print you have.
+  ipcMain.handle("voices.list", async () => listVoices());
+  ipcMain.handle("voices.record", async (_e, { test = false } = {}) => {
+    if (isMeetingActive()) return { ok: false, reason: "a meeting is using the microphone" };
+    if (isEnrolling()) return { ok: false, reason: "already recording" };
+    if (isListening()) stopListening();
+    voiceSuspend = true;
+    try {
+      const run = recordEnrollment({
+        seconds: test ? 10 : 40,
+        test,
+        onLevel: (l) => win?.webContents.send("voices.level", l),
+      });
+      const r = await run.done;
+      if (!r.ok || test) return r;
+      // A print from a noisy room or two voices is worse than none.
+      if ((r.consistency?.mean ?? 0) < 0.6) return { ...r, ok: false, reason: "the sample was inconsistent (noise or another voice?); try again somewhere quieter" };
+      const name = shellStore().settings.userName || "You";
+      return { ...r, embeddings: undefined, saved: setMyVoice({ embeddings: r.embeddings, name }) };
+    } catch (err) {
+      return { ok: false, reason: String(err.message ?? err) };
+    } finally {
+      voiceSuspend = false;
+    }
+  });
+  ipcMain.handle("voices.stop", async () => stopEnrollment());
+  ipcMain.handle("voices.forget", async (_e, { id } = {}) => forgetVoice(String(id ?? "")));
   ipcMain.handle("meeting.state", async () => ({ active: activeMeeting() }));
   ipcMain.handle("meeting.list", async () => listMeetings());
   ipcMain.handle("meeting.get", async (_e, { id } = {}) => getMeeting(id));

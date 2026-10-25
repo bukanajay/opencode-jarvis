@@ -255,6 +255,9 @@ final class Meeting: @unchecked Sendable {
     var deniedSent = false
     let engine = AVAudioEngine()
     var micOn = false
+    var printer: VoicePrinter?       // voiceprints (voice.swift); nil until loaded, or if it fails
+    var profiles: [VoiceProfile] = []
+    var printerSettled = false       // loaded or given up: replay waits for this
 
     init(dir: String) { self.dir = dir }
 
@@ -281,8 +284,24 @@ final class Meeting: @unchecked Sendable {
             msg["\(name)Db"] = s.db
             msg["\(name)Voiced"] = s.voiced
         }
-        emit(msg)
+        guard let printer else { emit(msg); return }
+        // Who said it: the voiceprint, and how close it is to each known voice.
+        // Off the meeting queue (tens of ms on the ANE); lines may land a beat late.
+        inFlightPrints += 1
+        let profiles = self.profiles
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let p = printer.embed(c.samples) {
+                msg["voiced"] = (p.voiced * 10).rounded() / 10
+                msg["print"] = p.vector.map { (Double($0) * 1e4).rounded() / 1e4 }
+                msg["voices"] = profiles.map { ["id": $0.id, "score": (Double(cosine(p.vector, $0.mean)) * 100).rounded() / 100] }
+            }
+            self.q.async {
+                emit(msg)
+                self.inFlightPrints -= 1
+            }
+        }
     }
+    var inFlightPrints = 0
 
     func setASR(_ a: Transcriber) {
         q.async {
@@ -425,14 +444,18 @@ final class Meeting: @unchecked Sendable {
                 group.enter()
                 t.listener.flush { group.leave() }
             }
-            group.notify(queue: self.q) {
-                for t in self.tracks.values { t.close() }
-                self.asr?.shutdown()
-                let seconds = Double(self.tracks.values.map(\.written).max() ?? 0) / Double(sampleRate)
-                emit(["kind": "status", "state": "stopped", "note": self.dir, "seconds": (seconds * 10).rounded() / 10])
-                exit(0)
-            }
+            group.notify(queue: self.q) { self.finish() }
         }
+    }
+
+    // On q, once every utterance is out; waits for the last voiceprints.
+    func finish() {
+        if inFlightPrints > 0 { q.asyncAfter(deadline: .now() + 0.05) { self.finish() }; return }
+        for t in tracks.values { t.close() }
+        asr?.shutdown()
+        let seconds = Double(tracks.values.map(\.written).max() ?? 0) / Double(sampleRate)
+        emit(["kind": "status", "state": "stopped", "note": dir, "seconds": (seconds * 10).rounded() / 10])
+        exit(0)
     }
 }
 
@@ -513,6 +536,14 @@ func runMeeting() -> Never {
     } else if engine != "parakeet" {
         fail("unavailable", "unknown engine \(engine)", code: 1)
     }
+    // Voiceprints: known voices from --voices (Main's people.json). Without the
+    // model the meeting still runs, just without voice matching.
+    let known = argValues("--voices").first.map(loadProfiles) ?? []
+    Task {
+        let printer = try? await VoicePrinter.load()
+        if printer == nil { emit(["kind": "status", "state": "listening", "note": "voiceprints unavailable"]) }
+        m.q.async { m.printer = printer; m.profiles = known; m.printerSettled = true }
+    }
     Task {
         do {
             if engine == "whisper" { m.setASR(try loadWhisper(model: model, language: language).0) }
@@ -530,7 +561,7 @@ func runMeeting() -> Never {
         let a = read(replayMic), b = read(replaySystem)
         Task {
             while true {
-                let ready = m.q.sync { m.asr != nil }
+                let ready = m.q.sync { m.asr != nil && m.printerSettled }
                 if ready { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
