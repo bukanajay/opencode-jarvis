@@ -384,6 +384,7 @@
           </select>
           <button type="button" id="mt-go">Start meeting</button>
           <button type="button" class="ghost" id="mt-cancel">Cancel</button>
+          <span class="res" id="mt-offer"></span>
           <span class="res">Stays on this Mac. Tell everyone on the call it is being transcribed.</span>
         </div>
         <div class="mt-head"><span class="rec"></span><span id="mt-status">recording</span><span id="mt-clock"></span><button type="button" class="ghost" id="mt-stop">Stop</button></div>
@@ -513,6 +514,12 @@
     <summary>Meetings</summary>
     <div class="body">
     <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click.</p>
+    <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="set-meetingPrompt" style="width:auto" /> Offer meeting mode when a call starts (never records on its own)</label></p>
+    <p class="row"><label class="res" for="set-meetingAudioDays">Keep recordings</label>
+      <select id="set-meetingAudioDays">
+        <option value="forever">forever</option><option value="90">90 days</option><option value="30">30 days</option><option value="7">7 days</option>
+      </select>
+      <span class="res">then delete the audio; transcripts, notes and voices stay</span></p>
     <div id="meetings-list"></div>
     </div>
   </details>
@@ -1499,15 +1506,41 @@
 
   $("meet").onclick = async () => {
     if ($("meet").classList.contains("on")) { $("mt-stop").click(); return; }
+    offeredApp = null; // opened by you, not offered for a call
+    $("mt-offer").textContent = "";
+    $("mt-cancel").textContent = "Cancel";
     paintMeeting($("meeting").classList.contains("setup") ? "" : "setup");
   };
-  $("mt-cancel").onclick = () => paintMeeting("");
+  $("mt-cancel").onclick = () => {
+    if (offeredApp) window.jarvis.meetingSnooze(offeredApp.name); // not for this call
+    offeredApp = null;
+    $("mt-offer").textContent = "";
+    paintMeeting("");
+  };
+  // Phase 6: a call app took the mic (or let go of it during a meeting).
+  // Only ever an offer: you press Start (or Stop) yourself.
+  let offeredApp = null;
+  window.jarvis?.onMeetingOffer?.(({ kind, app }) => {
+    if (kind === "start") {
+      if ($("meeting").classList.contains("on")) return;
+      offeredApp = app;
+      if (app.tap && MEETING_APPS.some(([v]) => v === app.tap)) $("mt-app").value = app.tap;
+      $("mt-offer").textContent = app.browser ? `${app.name} is using your microphone. A call?` : `${app.name} call started.`;
+      $("mt-cancel").textContent = "Not now";
+      paintMeeting("setup");
+    } else if (kind === "stop" && $("meeting").classList.contains("on")) {
+      $("mt-status").textContent = `${app.name} call ended · press Stop to save`;
+      addSys(`${app.name} call ended. Press Stop in the meeting panel to save the meeting.`);
+    }
+  });
   $("mt-go").onclick = async () => {
     const app = $("mt-app").value;
     const engine = $("mt-lang").value;
     try { localStorage.setItem("jarvis.meetingApp", app); localStorage.setItem("jarvis.meetingLang", engine); } catch {}
     $("mt-lines").innerHTML = "";
-    const r = await window.jarvis.meetingStart(app ? [app] : [], engine);
+    const r = await window.jarvis.meetingStart(app ? [app] : [], engine, offeredApp?.name);
+    offeredApp = null;
+    $("mt-offer").textContent = "";
     if (!r.ok) { paintMeeting(""); addSys(`Meeting did not start: ${r.reason}`, { bad: true }); return; }
     $("mt-status").textContent = "starting";
     paintMeeting("on");
@@ -2235,7 +2268,7 @@
         $("q").focus();
       };
       btns.append(sum, talk);
-      if ((m.engine ?? "parakeet") !== "hybrid") {
+      if ((m.engine ?? "parakeet") !== "hybrid" && !m.audioDeletedAt) {
         const redo = document.createElement("button");
         redo.type = "button";
         redo.className = "ghost";
@@ -2315,7 +2348,16 @@
   window.jarvis?.onInboxOpen?.(() => openInbox());
   window.jarvis?.inboxList?.().then((r) => paintInbox(r.items ?? [])).catch(() => {});
   // Start at login (menu bar, hidden window).
-  window.jarvis?.settingsGet?.().then((s) => { $("set-launchAtLogin").checked = s.settings?.launchAtLogin === "on"; }).catch(() => {});
+  window.jarvis?.settingsGet?.().then((s) => {
+    $("set-launchAtLogin").checked = s.settings?.launchAtLogin === "on";
+    $("set-meetingPrompt").checked = s.settings?.meetingPrompt !== "off";
+    $("set-meetingAudioDays").value = s.settings?.meetingAudioDays ?? "forever";
+  }).catch(() => {});
+  $("set-meetingPrompt").onchange = (e) => window.jarvis.appCommand("set.meetingPrompt", { value: e.target.checked ? "on" : "off" });
+  $("set-meetingAudioDays").onchange = async (e) => {
+    await window.jarvis.appCommand("set.meetingAudioDays", { value: e.target.value });
+    paintMeetings().catch(() => {});
+  };
   $("set-launchAtLogin").onchange = async (e) => {
     try {
       await window.jarvis.appCommand("set.launchAtLogin", { value: e.target.checked ? "on" : "off" });

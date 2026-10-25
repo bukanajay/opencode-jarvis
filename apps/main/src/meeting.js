@@ -8,7 +8,7 @@
 // segment as heard, echo flag included), transcript.jsonl (clean, written at
 // stop), meta.json.
 import { spawn } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -520,6 +520,35 @@ export async function retranscribeMeeting(id, { engine = "hybrid", root = meetin
     rmSync(work, { recursive: true, force: true });
   }
   return getMeeting(id, root);
+}
+
+// Phase 6: keep meeting audio N days (setting meetingAudioDays). Older
+// finished meetings lose mic.wav, system.wav and the voice clips; the
+// transcript, notes and voiceprints stay, so they still read, discuss and
+// recognise people. A meeting without audio cannot be re-transcribed.
+const AUDIO_FILES = ["mic.wav", "system.wav"];
+export function pruneMeetingAudio(days, { root = meetingsRoot(), now = Date.now() } = {}) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0) return { meetings: 0, bytes: 0 };
+  const cutoff = now - n * 24 * 3600 * 1000;
+  let meetings = 0, bytes = 0;
+  for (const m of listMeetings(root)) {
+    if (m.status === "recording" || m.audioDeletedAt || Date.parse(m.endedAt ?? m.startedAt) > cutoff) continue;
+    const dir = path.join(root, m.id);
+    const clips = existsSync(path.join(dir, "speakers")) ? readdirSync(path.join(dir, "speakers")).map((f) => path.join("speakers", f)) : [];
+    for (const f of [...AUDIO_FILES, ...clips]) {
+      const file = path.join(dir, f);
+      if (!existsSync(file)) continue;
+      bytes += statSync(file).size;
+      rmSync(file, { force: true });
+    }
+    const meta = JSON.parse(readFileSync(path.join(dir, "meta.json"), "utf8"));
+    meta.audioDeletedAt = new Date(now).toISOString();
+    for (const sp of meta.speakers ?? []) sp.clip = null;
+    writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+    meetings += 1;
+  }
+  return { meetings, bytes };
 }
 
 // Phase 5: the notes the brain wrote for a meeting (meetings-brain.js).

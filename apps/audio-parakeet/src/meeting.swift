@@ -611,3 +611,40 @@ func runMeeting() -> Never {
     withExtendedLifetime(sources) { RunLoop.main.run() }
     exit(0)
 }
+
+// MARK: call watch (Phase 6)
+
+// parakeet --watch-calls
+// Which apps are using the microphone right now, so Jarvis can offer meeting
+// mode when a call starts (and stopping it when the call ends). Prints
+//   {"kind":"inputs","inputs":[{"bundle":"com.microsoft.teams2","pid":123}]}
+// whenever the set changes; runs until stdin closes. Jarvis's own helpers
+// (dev.jarvis.*) are left out, so a meeting never sees itself. Reading this
+// needs no permission: it is the same list the menu bar's mic dot comes from.
+func runWatchCalls() -> Never {
+    let all = ProcessInfo.processInfo.environment["PK_WATCH_ALL"] != nil // tests: include our own helpers
+    var last: [String] = []
+    Thread.detachNewThread {
+        while readLine() != nil {}
+        exit(0)
+    }
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now(), repeating: 1.5)
+    timer.setEventHandler {
+        var now: [(bundle: String, pid: Int)] = []
+        for o in caObjects(systemObject, kAudioHardwarePropertyProcessObjectList) {
+            guard (caValue(o, kAudioProcessPropertyIsRunningInput, UInt32(0)) ?? 0) != 0 else { continue }
+            let bundle = caString(o, kAudioProcessPropertyBundleID) ?? ""
+            let pid = Int(caValue(o, kAudioProcessPropertyPID, pid_t(0)) ?? 0)
+            if pid == Int(getpid()) || (!all && bundle.hasPrefix("dev.jarvis.")) { continue }
+            now.append((bundle, pid))
+        }
+        let key = now.map { "\($0.bundle)#\($0.pid)" }.sorted()
+        guard key != last else { return }
+        last = key
+        emit(["kind": "inputs", "inputs": now.map { ["bundle": $0.bundle, "pid": $0.pid] }])
+    }
+    timer.resume()
+    withExtendedLifetime(timer) { RunLoop.main.run() }
+    exit(0)
+}

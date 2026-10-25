@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin"];
+const ALLOWLIST = ["set.accent", "set.density", "set.layout", "set.captionSize", "set.audioDevice", "set.wake", "set.voiceMode", "set.autoMode", "set.reviewMode", "set.isolation", "set.defaultAgent", "set.jarvisModel", "set.workerModel", "set.voice", "set.followUp", "set.userName", "set.onboarded", "set.launchAtLogin", "set.meetingPrompt", "set.meetingAudioDays"];
 
 export const ACCENTS = {
   phosphor: "#c8f04a",
@@ -34,6 +34,9 @@ export const FOLLOW_UPS = ["off", "15", "30", "60", "120"];
 export const DENSITIES = ["comfortable", "compact"];
 export const LAYOUTS = ["deck", "wide"];
 export const CAPTION_SIZES = ["small", "medium", "large"];
+// Meeting audio (mic.wav, system.wav, voice clips) kept this many days;
+// transcripts, notes and voiceprints stay. forever = never deleted.
+export const MEETING_AUDIO_DAYS = ["forever", "90", "30", "7"];
 
 export const DEFAULTS = {
   accent: "phosphor",
@@ -54,6 +57,8 @@ export const DEFAULTS = {
   userName: "",
   onboarded: "off", // first-run setup wizard done
   launchAtLogin: "off", // start Jarvis (menu bar, window hidden) when you log in
+  meetingPrompt: "on", // offer meeting mode when a call app starts using the mic (never starts on its own)
+  meetingAudioDays: "forever",
 };
 
 export function storePath() {
@@ -130,7 +135,11 @@ function validate(name, args) {
     case "set.voiceMode":
     case "set.autoMode":
     case "set.reviewMode":
+    case "set.meetingPrompt":
       if (!ON_OFF.includes(value)) throw new Error(`${name}: want on|off`);
+      break;
+    case "set.meetingAudioDays":
+      if (!MEETING_AUDIO_DAYS.includes(value)) throw new Error(`${name}: want ${MEETING_AUDIO_DAYS.join("|")}`);
       break;
     case "set.voice":
       if (!VOICES.includes(value)) throw new Error(`unknown voice: ${value} (known: ${VOICES.join(", ")})`);
