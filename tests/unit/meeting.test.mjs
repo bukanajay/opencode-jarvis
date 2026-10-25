@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 
 import os from "node:os";
 import path from "node:path";
 import {
-  createMeetingLog, echoVerdict, getMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
+  assignSpeakers, createMeetingLog, echoVerdict, getMeeting, isMeetingActive, listMeetings, meetingId, speakerFor,
   startMeeting, stopMeeting, transcriptText,
 } from "../../apps/main/src/meeting.js";
 
@@ -67,7 +67,8 @@ test("transcriptText: clock, speaker, words", () => {
 });
 
 // A stand-in helper: speaks the meeting protocol, stops on a `stop` line.
-function fakeHelper() {
+// diarized: what `--diarize` answers (turns + speakers), default none.
+function fakeHelper({ lines: extra = [], diarized = { turns: [], speakers: [] } } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "jarvis-fake-parakeet-"));
   const bin = path.join(dir, "parakeet");
   const lines = [
@@ -76,9 +77,17 @@ function fakeHelper() {
     { kind: "segment", stream: "mic", id: "m1", text: GOOD_EVENING, start: 3.9, end: 10.7, micDb: -23, systemDb: -14, micVoiced: 0.85, systemVoiced: 0.84 },
     { kind: "segment", stream: "system", id: "s1", text: GOOD_EVENING, start: 3.8, end: 10.8, micDb: -23, systemDb: -14, micVoiced: 0.85, systemVoiced: 0.84 },
     { kind: "segment", stream: "mic", id: "m2", text: "Great, I will review it after lunch.", start: 12.3, end: 15.4, micDb: -30, systemDb: -120, micVoiced: 0.5, systemVoiced: 0 },
+    ...extra,
   ];
   writeFileSync(bin, `#!/usr/bin/env node
 const lines = ${JSON.stringify(lines)};
+if (process.argv.includes("--diarize")) {
+  const d = ${JSON.stringify(diarized)};
+  console.log(JSON.stringify({ kind: "turns", turns: d.turns }));
+  for (const sp of d.speakers) console.log(JSON.stringify({ kind: "speaker", ...sp }));
+  console.log(JSON.stringify({ kind: "status", state: "diarized", speakers: d.speakers.length }));
+  process.exit(0);
+}
 const dir = process.argv[process.argv.indexOf("--meeting") + 1];
 require("node:fs").writeFileSync(dir + "/args.json", JSON.stringify(process.argv.slice(2)));
 for (const l of lines) console.log(JSON.stringify(l));
@@ -150,6 +159,57 @@ test("startMeeting: parakeet is the default; bad engine or missing model are cle
   assert.throws(() => startMeeting({ bin: fakeHelper(), root, engine: "bogus" }), /unknown speech engine/);
   assert.throws(() => startMeeting({ bin: fakeHelper(), root, engine: "whisper", model: "/nope.bin" }), /fetch:whisper-model/);
   assert.equal(isMeetingActive(), false);
+});
+
+test("assignSpeakers: overlap, then voiceprint, then nearest turn; names, letters, or Them", () => {
+  const P = (i) => Array.from({ length: 256 }, (_, k) => (k === i ? 1 : 0));
+  const turns = [
+    { speaker: "S2", start: 1, end: 5 }, { speaker: "S1", start: 6, end: 10 }, { speaker: "S2", start: 11, end: 14 },
+  ];
+  const speakers = [
+    { id: "S1", seconds: 4, print: P(1), voices: [{ id: "me", score: 0.9 }, { id: "p-ravi", score: 0.2 }] },
+    { id: "S2", seconds: 7, print: P(2), voices: [{ id: "p-ravi", score: 0.1 }] },
+  ];
+  const segs = [
+    { id: "a", stream: "system", start: 1.2, end: 4.8 },             // inside an S2 turn
+    { id: "b", stream: "system", start: 6.1, end: 9.5 },             // inside S1
+    { id: "c", stream: "system", start: 20, end: 21, print: P(1) },  // no turn: its voiceprint says S1
+    { id: "d", stream: "system", start: 15.5, end: 16 },             // no turn, no print: nearest turn (S2, 1.5 s)
+    { id: "e", stream: "system", start: 40, end: 41 },               // nothing near: stays Them
+    { id: "f", stream: "mic", start: 2, end: 3 },                    // your side is not touched
+  ];
+  const { speakers: named, who } = assignSpeakers(segs, { turns, speakers }, [{ id: "p-ravi", name: "Ravi" }]);
+  assert.deepEqual(named.map((s) => [s.id, s.label]), [["S2", "Speaker A"], ["S1", "Speaker B"]], "lettered by first turn; a 'me' match never names a call voice");
+  assert.deepEqual([...who].map(([k, v]) => `${k}:${v.id}`), ["a:S2", "b:S1", "c:S1", "d:S2"]);
+
+  const known = assignSpeakers(segs, { turns, speakers: [{ ...speakers[1], voices: [{ id: "p-ravi", score: 0.71 }] }, speakers[0]] }, [{ id: "p-ravi", name: "Ravi" }]);
+  assert.deepEqual(known.speakers.map((s) => [s.id, s.label, s.match?.name]), [["S2", "Ravi", "Ravi"], ["S1", "Them", undefined]], "one unknown voice stays Them");
+});
+
+test("stopMeeting: the call side is told apart before the transcript is written", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jarvis-meetings-"));
+  const P = (i) => Array.from({ length: 256 }, (_, k) => (k === i ? 1 : 0));
+  const bin = fakeHelper({
+    lines: [{ kind: "segment", stream: "system", id: "s2", text: "And the migration needs one more review.", start: 16, end: 19, micDb: -120, systemDb: -15, micVoiced: 0, systemVoiced: 0.8 }],
+    diarized: {
+      turns: [{ speaker: "S1", start: 3.7, end: 10.9 }, { speaker: "S2", start: 15.8, end: 19.2 }],
+      speakers: [{ id: "S1", seconds: 7.2, turns: 1, print: P(1), voices: [], clip: "/x/S1.wav" }, { id: "S2", seconds: 3.4, turns: 1, print: P(2), voices: [] }],
+    },
+  });
+  const events = [];
+  const m = startMeeting({ bin, root, onEvent: (e) => events.push(e) });
+  await new Promise((r) => setTimeout(r, 300));
+  const r = await stopMeeting();
+  assert.equal(r.status, "done");
+  assert.equal(r.speakers, 2);
+  assert.ok(events.some((e) => e.type === "status" && e.state === "diarizing"));
+  const relabelled = events.filter((e) => e.type === "segment" && e.segment.stream === "system").map((e) => `${e.segment.id}:${e.segment.speaker}`);
+  assert.deepEqual(relabelled.slice(-2), ["s1:Speaker A", "s2:Speaker B"]);
+  const got = getMeeting(m.id, root);
+  assert.deepEqual(got.transcript.map((s) => s.speaker), ["Speaker A", "You", "Speaker B"]);
+  assert.deepEqual(got.speakers.map((s) => [s.id, s.label]), [["S1", "Speaker A"], ["S2", "Speaker B"]]);
+  assert.equal(JSON.stringify(got.speakers).includes("print"), false, "voiceprints only in speakers.json");
+  assert.equal(JSON.parse(readFileSync(path.join(m.dir, "speakers.json"), "utf8"))[0].print.length, 256);
 });
 
 test("startMeeting: missing helper is a clear error; stop with nothing running is not", async () => {

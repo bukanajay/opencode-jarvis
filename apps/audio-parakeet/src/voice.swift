@@ -47,7 +47,7 @@ final class VoicePrinter: @unchecked Sendable {
 
     // (L2-normalised embedding, seconds of speech it was made from), nil when
     // the clip holds too little speech to say anything about the voice.
-    func embed(_ samples: [Float]) -> (vector: [Float], voiced: Double)? {
+    func embed(_ samples: [Float], minVoiced: Double = minVoicedForPrint) -> (vector: [Float], voiced: Double)? {
         q.sync {
             var sum = [Float](repeating: 0, count: 256)
             var weight = 0.0
@@ -56,14 +56,14 @@ final class VoicePrinter: @unchecked Sendable {
                 let win = Array(samples[start..<min(start + voiceWindow, samples.count)])
                 start += voiceWindow
                 let (mask, voiced) = speechMask(win)
-                guard voiced >= 0.5,
+                guard voiced >= min(0.5, minVoiced),
                       let e = try? extractor.getEmbeddings(audio: win, masks: [mask], minActivityThreshold: 10).first,
                       e.contains(where: { $0 != 0 }) else { continue }
                 let n = l2normalize(e)
                 for i in 0..<256 { sum[i] += n[i] * Float(voiced) }
                 weight += voiced
             }
-            guard weight >= minVoicedForPrint else { return nil }
+            guard weight >= minVoiced else { return nil }
             return (l2normalize(sum), weight)
         }
     }
