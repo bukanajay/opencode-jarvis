@@ -168,6 +168,7 @@ struct Committed {
     let text: String
     let start: Double
     let end: Double
+    let samples: [Float]             // the utterance itself, for its voiceprint
 }
 
 // All mutable state lives on one serial queue; the tap and model tasks hop onto it.
@@ -306,7 +307,7 @@ final class Listener: @unchecked Sendable {
                     debug(["stream": self.stream ?? "-", "result": text])
                     self.inFlight -= 1
                     // Empty: noise, a cough, a door.
-                    if !text.isEmpty { onCommit(Committed(id: id, text: text, start: startSec, end: endSec)) }
+                    if !text.isEmpty { onCommit(Committed(id: id, text: text, start: startSec, end: endSec, samples: samples)) }
                     done?()
                 }
             }
@@ -344,6 +345,8 @@ final class Listener: @unchecked Sendable {
 }
 
 if args.contains("--meeting") { runMeeting() }
+if let i = args.firstIndex(of: "--embed") { runEmbed(Array(args[(i + 1)...])) }
+if args.contains("--enroll") { runEnroll() }
 
 let listener = Listener()
 

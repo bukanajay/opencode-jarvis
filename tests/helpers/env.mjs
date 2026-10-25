@@ -16,6 +16,7 @@ process.env.JARVIS_DECISIONS_FILE = path.join(root, "decisions.jsonl");
 process.env.JARVIS_SLACK_FILE = path.join(root, "slack.json");
 process.env.JARVIS_SECRETS_FILE = path.join(root, "secrets.json");
 process.env.JARVIS_MEETINGS_DIR = path.join(root, "meetings");
+process.env.JARVIS_VOICES_FILE = path.join(root, "voices", "people.json");
 process.env.JARVIS_WORKTREE_ROOT ??= path.join(root, "worktrees");
 process.env.JARVIS_EMBED_OFF = "1";
 process.env.JARVIS_PROJECT = root;

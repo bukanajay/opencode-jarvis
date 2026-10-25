@@ -19,7 +19,8 @@ if (process.platform !== "darwin" || process.arch !== "arm64") {
   process.exit(0);
 }
 if (!existsSync(BIN)) throw new Error("no live binary: run npm run build:parakeet");
-const { startMeeting, stopMeeting, getMeeting, whisperModel } = await import("../apps/main/src/meeting.js");
+const { startMeeting, stopMeeting, getMeeting, whisperModel, SOMEONE_ELSE } = await import("../apps/main/src/meeting.js");
+const { recordEnrollment, setMyVoice } = await import("../apps/main/src/voices.js");
 
 const RATE = 16000;
 const dir = mkdtempSync(path.join(os.tmpdir(), "jarvis-meeting-"));
@@ -68,7 +69,31 @@ const HINDI = [
   { who: "You", stream: "mic", voice: "Lekha", text: "हाँ, मैं आज शाम तक रिलीज़ नोट्स भेज दूँगा।", keys: ["aaj", "release", "notes", "bhej"] },
 ];
 
-async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
+// Voiceprints (Phase 2): Samantha enrolls as you; Moira talks into your mic
+// with no call audio and must come out as someone else, not You.
+const VOICES = [
+  { who: "You", stream: "mic", voice: "Samantha", text: "Morning everyone, the onboarding flow shipped yesterday." },
+  { who: "Them", stream: "system", voice: "Daniel", text: "Nice work. Can you send me the release notes before Friday?" },
+  { who: SOMEONE_ELSE, stream: "mic", voice: "Moira", text: "Sorry to interrupt, is this room booked after lunch?" },
+  { who: "You", stream: "mic", voice: "Samantha", text: "Sure, I will send them this afternoon." },
+];
+
+async function enrollSamantha() {
+  const said = "Hi Jarvis, this is my voice. I usually spend the morning on code reviews and the afternoon in meetings with the team. " +
+    "When something breaks in production, I want a short summary first and the details after. " +
+    "Please keep the release notes short, and send me the open questions before the end of the day.";
+  const pcm = speech("enroll", "Samantha", said);
+  const wav = path.join(dir, "enroll-in.wav");
+  writePcm(wav, pcm);
+  const file = path.join(dir, "people.json");
+  const r = await recordEnrollment({ replay: wav, file }).done;
+  if (!r.ok) throw new Error(`enrollment: ${r.reason}`);
+  setMyVoice({ embeddings: r.embeddings, name: "Samantha" }, file);
+  console.log(`enroll-ok: ${r.voiced} s of speech, ${r.windows} windows, consistency ${r.consistency.mean}`);
+  return file;
+}
+
+async function run(echoDb, { engine = "parakeet", lines = ENGLISH, voices = null } = {}) {
   const gap = RATE; // 1 s between turns
   const clips = lines.map((l, i) => speech(`l${i}`, l.voice, l.text));
   const total = gap + clips.reduce((n, c) => n + c.length + gap, 0) + gap;
@@ -83,7 +108,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
     }
     at += c.length + gap;
   });
-  const tag = `${engine}-echo${echoDb}`;
+  const tag = `${engine}${voices ? "-voices" : ""}-echo${echoDb}`;
   writePcm(path.join(dir, `${tag}-mic.wav`), mic);
   writePcm(path.join(dir, `${tag}-system.wav`), system);
 
@@ -93,6 +118,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
     bin: BIN,
     root: path.join(dir, "meetings"),
     engine,
+    voices,
     replay: { mic: path.join(dir, `${tag}-mic.wav`), system: path.join(dir, `${tag}-system.wav`) },
     onEvent: (e) => events.push(e),
   });
@@ -102,7 +128,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
   console.log(`[${tag} dB] replay-ok: ${(Date.now() - t0) / 1000}s for ${(total / RATE).toFixed(1)}s of call`);
 
   const got = getMeeting(m.id, path.join(dir, "meetings"));
-  const heard = events.filter((e) => e.type === "segment").map((e) => `${e.segment.speaker}${e.segment.echo ? `(echo:${e.segment.echo})` : ""} ${e.segment.start}-${e.segment.end}: ${e.segment.text}`);
+  const heard = events.filter((e) => e.type === "segment").map((e) => `${e.segment.speaker}${e.segment.echo ? `(echo:${e.segment.echo})` : ""} ${e.segment.start}-${e.segment.end}${e.segment.voices ? ` me=${e.segment.voices.find((v) => v.id === "me")?.score}` : ""}: ${e.segment.text}`);
   const drift = () => new Error(`transcript drift\n  want ${JSON.stringify(lines.map((l) => `${l.who}: ${l.text}`))}\n  have ${JSON.stringify(got.transcript.map((s) => `${s.speaker}: ${s.text}`))}\n  heard ${JSON.stringify(heard, null, 2)}`);
   if (got.transcript.map((s) => s.speaker).join() !== lines.map((l) => l.who).join()) throw drift();
   got.transcript.forEach((s, i) => {
@@ -126,6 +152,7 @@ async function run(echoDb, { engine = "parakeet", lines = ENGLISH } = {}) {
 try {
   await run(-30);
   await run(-12);
+  await run(-12, { lines: VOICES, voices: await enrollSamantha() });
   if (existsSync(whisperModel())) await run(-12, { engine: "whisper", lines: HINDI });
   else console.log("skip whisper: no model (npm run fetch:whisper-model)");
 } finally {

@@ -260,6 +260,9 @@
   button.icon svg { width: 17px; height: 17px; }
   button.icon.live { box-shadow: 0 0 18px rgba(200, 240, 74, 0.45); animation: micbreathe 1.6s ease-in-out infinite; }
   #voice.on { background: var(--accent); color: #0a0d05; }
+  #vp-say { margin: 6px 0; padding: 10px 12px; border-left: 2px solid var(--accent); color: var(--ink); line-height: 1.55; font-size: 14px; }
+  #vp-meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 8px 0; }
+  #vp-meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 90ms linear; }
   #meet.on { background: var(--danger); border-color: var(--danger); color: #fff; }
   #meeting { display: none; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 12px; margin-bottom: 8px; }
   #meeting.setup, #meeting.on { display: block; }
@@ -463,6 +466,19 @@
     <p class="row"><button class="ghost" id="profile-setup" type="button">Run setup again</button></p>
     <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="set-launchAtLogin" style="width:auto" /> Start Jarvis when I log in (menu bar, window hidden)</label></p>
     <div class="res" id="profile-note"></div>
+    <p class="res" id="vp-status">Jarvis doesn't know your voice yet.</p>
+    <p class="row">
+      <button class="ghost" id="vp-enroll" type="button">Teach Jarvis my voice</button>
+      <button class="ghost" id="vp-test" type="button" hidden>Test it</button>
+      <button class="ghost" id="vp-forget" type="button" hidden>Forget my voice</button>
+    </p>
+    <div id="vp-panel" hidden>
+      <p class="res" id="vp-say-label">Read this aloud at your normal pace, then press Done:</p>
+      <blockquote id="vp-say"></blockquote>
+      <div id="vp-meter"><i></i></div>
+      <p class="row"><span class="res" id="vp-clock">0 s</span><button type="button" id="vp-done">Done</button></p>
+    </div>
+    <div class="res" id="vp-note"></div>
     </div>
   </details>
   <details id="slack-settings" open>
@@ -1957,6 +1973,56 @@
   $("ob-back").onclick = () => { if (ob.step > 0) { ob.step -= 1; ob.errors = null; obRender(); } };
   $("ob-later").onclick = closeOnboarding;
   $("profile-setup").onclick = openOnboarding;
+
+  // Your voiceprint (Main: voices.js). Enrollment reads ~30 s of mixed English
+  // and Hinglish (how you talk in meetings); "test it" reads one sentence and
+  // reports how close it is. Audio stays on this Mac; only the print is kept.
+  const VP_ENROLL = "Hi Jarvis, this is my voice. I usually spend the morning on code reviews and the afternoon in meetings with the team. " +
+    "Aaj ka plan simple hai: pehle standup, phir design review, aur shaam tak release notes bhej dena hai. " +
+    "When something breaks in production, I want a short summary first and the details after. " +
+    "Agar koi blocker ho to mujhe turant batana, main dekh lunga.";
+  const VP_TEST = "Jarvis, check if this is my voice. Kal subah ki meeting ka summary bhi ready rakhna.";
+  let vpRecording = false;
+  async function paintVoicePrint() {
+    const me = (await window.jarvis.voicesList().catch(() => [])).find((p) => p.id === "me");
+    $("vp-status").textContent = me
+      ? `Jarvis knows your voice (${me.samples} samples, ${new Date(me.updatedAt).toLocaleDateString()}). In meetings, lines that are not your voice are not labelled You.`
+      : "Jarvis doesn't know your voice yet.";
+    $("vp-enroll").textContent = me ? "Record my voice again" : "Teach Jarvis my voice";
+    $("vp-test").hidden = !me;
+    $("vp-forget").hidden = !me;
+  }
+  async function vpRecord(test) {
+    if (vpRecording) return;
+    vpRecording = true;
+    $("vp-say").textContent = test ? VP_TEST : VP_ENROLL;
+    $("vp-panel").hidden = false;
+    $("vp-note").textContent = "";
+    $("vp-meter").firstChild.style.width = "0";
+    $("vp-done").disabled = false;
+    const r = await window.jarvis.voicesRecord(test);
+    vpRecording = false;
+    $("vp-panel").hidden = true;
+    if (!r.ok) $("vp-note").textContent = `Not kept: ${r.reason}.`;
+    else if (test) {
+      const pct = Math.round((r.meScore ?? 0) * 100);
+      $("vp-note").textContent = r.meScore >= 0.5 ? `That's you (${pct}% match).` : `That didn't sound like your saved voice (${pct}% match). Record it again in a quiet spot.`;
+    } else $("vp-note").textContent = `Saved: ${Math.round(r.voiced)} s of speech, consistency ${Math.round((r.consistency?.mean ?? 0) * 100)}%.`;
+    paintVoicePrint();
+  }
+  window.jarvis?.onVoicesLevel?.(({ db, seconds }) => {
+    $("vp-meter").firstChild.style.width = `${Math.max(0, Math.min(100, (db + 60) * 2))}%`; // −60…−10 dBFS
+    $("vp-clock").textContent = `${Math.floor(seconds)} s`;
+  });
+  $("vp-enroll").onclick = () => vpRecord(false);
+  $("vp-test").onclick = () => vpRecord(true);
+  $("vp-done").onclick = async () => { $("vp-done").disabled = true; await window.jarvis.voicesStop(); };
+  $("vp-forget").onclick = async () => {
+    await window.jarvis.voicesForget("me");
+    $("vp-note").textContent = "Your voiceprint is deleted.";
+    paintVoicePrint();
+  };
+  paintVoicePrint().catch(() => {});
   window.jarvis?.settingsGet?.().then((s) => {
     paintProfile(s.settings);
     if (s.settings?.onboarded !== "on") openOnboarding();
