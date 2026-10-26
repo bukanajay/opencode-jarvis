@@ -99,16 +99,42 @@
   #working .tdot:nth-child(2) { animation-delay: 0.15s; }
   #working .tdot:nth-child(3) { animation-delay: 0.3s; }
   @keyframes tbounce { 0%, 100% { transform: translateY(0); opacity: 0.45; } 50% { transform: translateY(-5px); opacity: 1; } }
-  /* System drawer: MCP + audit live here, off the main screen. */
-  #scrim { position: fixed; inset: 0; z-index: 55; background: rgba(3, 5, 6, 0.55); }
+  /* Settings window: sections listed on the left, one shown at a time. */
+  #scrim { position: fixed; inset: 0; z-index: 55; background: rgba(3, 5, 6, 0.7); }
   #drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
-    width: min(380px, 92vw); padding: 16px;
-    background: var(--panel); border-left: 1px solid var(--line);
-    transform: translateX(105%); transition: transform 180ms ease;
-    overflow-y: auto; display: grid; gap: 12px; align-content: start;
+    position: fixed; z-index: 60; inset: 5vh 0 auto; margin: 0 auto;
+    width: min(1040px, calc(100vw - 32px)); height: min(760px, 90vh);
+    display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6); overflow: hidden; animation: cardin 180ms ease;
   }
-  #drawer.open { transform: none; }
+  #drawer.open { display: flex; }
+  #set-nav { flex: 0 0 248px; display: flex; flex-direction: column; gap: 2px; padding: 16px 12px; background: #070b0d; border-right: 1px solid var(--line); overflow-y: auto; }
+  #set-nav .title { font-size: 17px; font-weight: 600; }
+  #set-nav #drawer-x { padding: 4px 12px; font-size: 12px; }
+  #set-search { flex: 0 0 auto; margin-bottom: 6px; padding: 8px 10px; font-size: 13px; }
+  #set-nav .grp { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a9d94; margin: 12px 10px 4px; }
+  #set-nav button[data-pane] {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px;
+    background: transparent; border: 0; color: #cfdcd5; font: 400 13.5px var(--body);
+  }
+  #set-nav button[data-pane] > span:first-child { flex: 1; }
+  #set-nav button[data-pane]:hover { background: var(--panel2); filter: none; }
+  #set-nav button[data-pane][aria-current="true"] { background: #15201b; color: var(--accent); }
+  #set-nav button[data-pane][hidden] { display: none; }
+  #set-nav .hint { color: #8a9d94; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
+  #set-panes { flex: 1; min-width: 0; overflow-y: auto; padding: 28px 36px; }
+  section.pane { max-width: 640px; background: none; border: 0; border-radius: 0; padding: 0; }
+  .pane > h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0; }
+  .pane > .lead { margin: 4px 0 0; color: #a9bab2; }
+  .pane > .body { display: grid; gap: 12px; margin-top: 18px; }
+  .pane > .body p { margin: 0; }
+  .pane .res { font-size: 12px; color: #8a9d94; }
+  .pane input[type=checkbox] { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  @media (max-width: 760px) {
+    #drawer { inset: 0; width: 100vw; height: 100vh; border-radius: 0; flex-direction: column; }
+    #set-nav { flex: 0 0 auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    #set-panes { padding: 20px 16px; }
+  }
   /* Decision inbox: everything waiting on you, one queue. */
   #inbox-panel {
     position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
@@ -144,7 +170,6 @@
   .au-log { font-family: var(--cap); font-size: 11px; color: var(--dim); display: grid; gap: 3px; max-height: 180px; overflow: auto; }
   .au-log .deny { color: var(--danger); }
   .pb-team { font-family: var(--cap); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-top: 10px; }
-  #drawer details { margin: 0; }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
   #ring-wrap { position: relative; }
   #ring { width: 100%; height: 100%; min-height: 240px; display: block; border-radius: 8px; cursor: pointer; }
@@ -321,16 +346,6 @@
   body.voice-on #chat-hide { display: inline-flex; }
   #caption { min-height: 24px; font-size: 14px; color: var(--ink); opacity: 0.9; }
   #caption:empty::before { content: "captions always on — speak or type"; color: var(--dim); font-size: 12.5px; }
-  details { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-  details > summary {
-    cursor: pointer; padding: 12px 14px; list-style: none;
-    font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.18em;
-    text-transform: uppercase; color: var(--dim);
-  }
-  details > summary::-webkit-details-marker { display: none; }
-  details > summary::before { content: "▸ "; color: var(--accent); }
-  details[open] > summary::before { content: "▾ "; }
-  details > .body { padding: 0 14px 14px; display: grid; gap: 10px; }
   pre.term {
     background: #04070a; border: 1px solid var(--line); border-radius: 8px;
     padding: 10px 12px; max-height: 220px; overflow: auto;
@@ -576,27 +591,55 @@
     </div>
     <div id="inbox-list"></div>
   </aside>
-  <aside id="drawer" aria-label="System panels">
-    <div class="row" style="justify-content:space-between;">
-      <span class="tele">system</span>
-      <button class="ghost icon" id="drawer-x" aria-label="Close panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-    </div>
-  <details id="model-settings" open>
-    <summary>Models</summary>
-    <div class="body">
-    <p><label class="res">Jarvis<br /><select id="set-jarvisModel" style="width:100%"></select></label></p>
-    <p><label class="res">Fleet workers<br /><select id="set-workerModel" style="width:100%"></select></label></p>
-    <p><label class="res">Default agent<br /><select id="set-defaultAgent" style="width:100%"></select></label></p>
-    <div class="res" id="model-note"></div>
-    </div>
-  </details>
-  <details id="profile-settings" open>
-    <summary>You</summary>
-    <div class="body">
+  <aside id="drawer" role="dialog" aria-modal="true" aria-label="Settings">
+    <nav id="set-nav" aria-label="Settings sections">
+      <div class="row" style="justify-content:space-between;padding:0 4px 10px"><span class="title">Settings</span><button type="button" class="ghost" id="drawer-x">Done</button></div>
+      <input id="set-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false" />
+      <div class="grp">You</div>
+      <button type="button" data-pane="profile-settings"><span>Profile</span></button>
+      <button type="button" data-pane="voice-settings"><span>Voice &amp; language</span></button>
+      <button type="button" data-pane="people-settings"><span>People &amp; voices</span></button>
+      <div class="grp">Jarvis</div>
+      <button type="button" data-pane="model-settings"><span>Models</span></button>
+      <button type="button" data-pane="autonomy-settings"><span>Autonomy</span><span class="hint" id="au-sum"></span></button>
+      <button type="button" data-pane="playbook-settings"><span>Playbooks</span><span class="hint" id="pb-sum"></span></button>
+      <button type="button" data-pane="meetings-settings"><span>Meetings</span></button>
+      <div class="grp">Connections</div>
+      <button type="button" data-pane="slack-settings"><span>Slack</span><span class="hint" id="slack-sum"></span></button>
+      <button type="button" data-pane="connector-settings"><span>Connectors</span><span class="hint" id="cn-sum"></span></button>
+      <button type="button" data-pane="mcp"><span>MCP servers</span><span class="hint" id="mcp-sum"></span></button>
+      <div class="grp">App</div>
+      <button type="button" data-pane="audit-details"><span>Settings history</span></button>
+    </nav>
+    <div id="set-panes">
+    <section class="pane" id="profile-settings" hidden>
+      <h1>Profile</h1>
+      <p class="lead">Who you are to Jarvis, and how it starts.</p>
+      <div class="body">
     <p class="res" id="profile-name">Jarvis doesn't know your name yet.</p>
     <p class="row"><button class="ghost" id="profile-setup" type="button">Run setup again</button></p>
     <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="set-launchAtLogin" style="width:auto" /> Start Jarvis when I log in (menu bar, window hidden)</label></p>
     <div class="res" id="profile-note"></div>
+      </div>
+    </section>
+    <section class="pane" id="voice-settings" hidden>
+      <h1>Voice &amp; language</h1>
+      <p class="lead">How you talk to Jarvis, and how it talks back.</p>
+      <div class="body">
+    <p><label class="res">I talk to Jarvis in<br /><select id="set-listenLanguage" style="width:100%">
+      <option value="en">English</option><option value="hi">Hindi / Hinglish</option><option value="mr">Marathi</option>
+    </select></label></p>
+    <p class="res" id="lang-note"></p>
+    <p><label class="res">Jarvis's voice<br /><select id="set-voice" style="width:100%"></select></label></p>
+    <p class="row"><button class="ghost" id="voice-play" type="button">Play sample</button></p>
+    <p><label class="res">After “hey <span id="wake-name">jarvis</span>”, keep listening for<br /><select id="set-followUp" style="width:100%"></select></label></p>
+    <div class="res" id="voice-note"></div>
+      </div>
+    </section>
+    <section class="pane" id="people-settings" hidden>
+      <h1>People &amp; voices</h1>
+      <p class="lead">Voices Jarvis recognises in voice mode and meetings. Stored only on this Mac.</p>
+      <div class="body">
     <p class="res" id="vp-status">Jarvis doesn't know your voice yet.</p>
     <p class="row">
       <button class="ghost" id="vp-enroll" type="button">Teach Jarvis my voice</button>
@@ -613,23 +656,56 @@
     <p class="row"><button class="ghost" id="people-name" type="button">Name voices from recent meetings</button><span class="res" id="people-note"></span></p>
     <p class="res" id="people-head" hidden>People Jarvis knows by voice:</p>
     <div id="people-list"></div>
-    </div>
-  </details>
-  <details id="meetings-settings" open>
-    <summary>Meetings</summary>
-    <div class="body">
-    <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click. Your meetings are in the Meetings workspace on the left.</p>
+      </div>
+    </section>
+    <section class="pane" id="model-settings" hidden>
+      <h1>Models</h1>
+      <p class="lead">Checked against the OpenCode server before saving.</p>
+      <div class="body">
+    <p><label class="res">Jarvis<br /><select id="set-jarvisModel" style="width:100%"></select></label></p>
+    <p><label class="res">Fleet workers<br /><select id="set-workerModel" style="width:100%"></select></label></p>
+    <p><label class="res">Default agent<br /><select id="set-defaultAgent" style="width:100%"></select></label></p>
+    <div class="res" id="model-note"></div>
+      </div>
+    </section>
+    <section class="pane" id="autonomy-settings" hidden>
+      <h1>Autonomy</h1>
+      <div class="body">
+    <p class="res">What workers may do without asking you. Jarvis can make this more careful by itself, never less. Deploy, spend and destructive actions always ask.</p>
+    <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="au-on" style="width:auto" /> Let Jarvis answer routine requests itself</label></p>
+    <p><label class="res">Preset<br /><select id="au-preset" style="width:100%"><option value="cautious">Cautious — only reading is automatic</option><option value="balanced">Balanced — edits in worktrees, tests, reads</option><option value="hands-off">Hands-off — also other shell commands</option></select></label></p>
+    <div class="au-grid" id="au-classes"></div>
+    <p class="res" style="margin-top:10px">Rules</p>
+    <div id="au-rules" class="res"></div>
+    <p class="res" style="margin-top:10px">Recent decisions</p>
+    <div class="au-log" id="au-log"></div>
+    <div class="res" id="au-note"></div>
+      </div>
+    </section>
+    <section class="pane" id="playbook-settings" hidden>
+      <h1>Playbooks</h1>
+      <div class="body">
+    <p class="res">Operations you hand to Jarvis once. Anything that changes something arrives as a branch or a draft in your inbox.</p>
+    <div id="pb-list"></div>
+    <div class="res" id="pb-note"></div>
+      </div>
+    </section>
+    <section class="pane" id="meetings-settings" hidden>
+      <h1>Meetings</h1>
+      <p class="lead">Preferences only. Your meetings, notes and transcripts are in the Meetings workspace.</p>
+      <div class="body">
+    <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click. </p>
     <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="set-meetingPrompt" style="width:auto" /> Offer meeting mode when a call starts (never records on its own)</label></p>
     <p class="row"><label class="res" for="set-meetingAudioDays">Keep recordings</label>
       <select id="set-meetingAudioDays">
         <option value="forever">forever</option><option value="90">90 days</option><option value="30">30 days</option><option value="7">7 days</option>
       </select>
       <span class="res">then delete the audio; transcripts, notes and voices stay</span></p>
-    </div>
-  </details>
-  <details id="slack-settings" open>
-    <summary>Slack <span class="res" id="slack-sum"></span></summary>
-    <div class="body">
+      </div>
+    </section>
+    <section class="pane" id="slack-settings" hidden>
+      <h1>Slack</h1>
+      <div class="body">
     <div id="slack-setup">
       <p class="res">Reach Jarvis from Slack when you're away from the Mac: DM it like the deck, get decisions with buttons, briefs and worker results. Runs over Socket Mode from this Mac (no server).</p>
       <p class="res">1. <button class="ghost" id="slack-manifest" type="button">Copy app manifest</button> then <button class="ghost" id="slack-open" type="button">Create the Slack app</button> → <i>From an app manifest</i>, pick your workspace, paste, create.</p>
@@ -646,66 +722,33 @@
       <p class="row"><button class="ghost" id="slack-test" type="button">Send test message</button><button class="ghost" id="slack-off" type="button">Disconnect</button><button class="ghost danger" id="slack-forget" type="button">Forget tokens</button></p>
     </div>
     <div class="res" id="slack-note"></div>
-    </div>
-  </details>
-  <details id="connector-settings">
-    <summary>Connectors <span class="res" id="cn-sum"></span></summary>
-    <div class="body">
+      </div>
+    </section>
+    <section class="pane" id="connector-settings" hidden>
+      <h1>Connectors</h1>
+      <div class="body">
     <p class="res">Company systems Jarvis can read for briefs, the inbox and your questions. Read-only by default; anything that writes goes through a worker and your approval. Tokens are kept in the macOS keychain and added to OpenCode at runtime (your opencode.json is not edited).</p>
     <div id="cn-list"></div>
     <div class="res" id="cn-yours"></div>
-    </div>
-  </details>
-  <details id="autonomy-settings">
-    <summary>Autonomy <span class="res" id="au-sum"></span></summary>
-    <div class="body">
-    <p class="res">What workers may do without asking you. Jarvis can make this more careful by itself, never less. Deploy, spend and destructive actions always ask.</p>
-    <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="au-on" style="width:auto" /> Let Jarvis answer routine requests itself</label></p>
-    <p><label class="res">Preset<br /><select id="au-preset" style="width:100%"><option value="cautious">Cautious — only reading is automatic</option><option value="balanced">Balanced — edits in worktrees, tests, reads</option><option value="hands-off">Hands-off — also other shell commands</option></select></label></p>
-    <div class="au-grid" id="au-classes"></div>
-    <p class="res" style="margin-top:10px">Rules</p>
-    <div id="au-rules" class="res"></div>
-    <p class="res" style="margin-top:10px">Recent decisions</p>
-    <div class="au-log" id="au-log"></div>
-    <div class="res" id="au-note"></div>
-    </div>
-  </details>
-  <details id="playbook-settings">
-    <summary>Playbooks <span class="res" id="pb-sum"></span></summary>
-    <div class="body">
-    <p class="res">Operations you hand to Jarvis once. Anything that changes something arrives as a branch or a draft in your inbox.</p>
-    <div id="pb-list"></div>
-    <div class="res" id="pb-note"></div>
-    </div>
-  </details>
-  <details id="voice-settings" open>
-    <summary>Voice</summary>
-    <div class="body">
-    <p><label class="res">I talk to Jarvis in<br /><select id="set-listenLanguage" style="width:100%">
-      <option value="en">English</option><option value="hi">Hindi / Hinglish</option><option value="mr">Marathi</option>
-    </select></label></p>
-    <p class="res" id="lang-note"></p>
-    <p><label class="res">Jarvis's voice<br /><select id="set-voice" style="width:100%"></select></label></p>
-    <p class="row"><button class="ghost" id="voice-play" type="button">Play sample</button></p>
-    <p><label class="res">After “hey <span id="wake-name">jarvis</span>”, keep listening for<br /><select id="set-followUp" style="width:100%"></select></label></p>
-    <div class="res" id="voice-note"></div>
-    </div>
-  </details>
-  <details id="mcp" open>
-    <summary>MCP <span class="res" id="mcp-sum"></span></summary>
-    <div class="body">
+      </div>
+    </section>
+    <section class="pane" id="mcp" hidden>
+      <h1>MCP servers</h1>
+      <p class="lead">Your own servers from opencode.json, left as they are.</p>
+      <div class="body">
     <div class="res" id="mcp-list"></div>
     <p class="row"><button class="ghost" id="mcp-refresh">Refresh</button></p>
-    </div>
-  </details>
-
-  <details id="audit-details" open>
-    <summary>Settings — audit log</summary>
-    <div class="body">
+      </div>
+    </section>
+    <section class="pane" id="audit-details" hidden>
+      <h1>Settings history</h1>
+      <p class="lead">Every settings change, by voice or by hand.</p>
+      <div class="body">
     <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;min-height:44px;"></div>
     <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
+      </div>
+    </section>
     </div>
-  </details>
   </aside>
 
   <!-- compat anchors kept for wiring -->
@@ -1905,10 +1948,22 @@
   $("work-x").onclick = () => { selected = null; $("work").classList.remove("show"); };
   $("work").addEventListener("click", (e) => { if (e.target === $("work")) { selected = null; $("work").classList.remove("show"); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { selected = null; $("work").classList.remove("show"); closeDrawer(); } });
-  function openDrawer() {
+  // Settings window: opens on the section you name, else the last one you used.
+  let setPane = "profile-settings";
+  try { const p = localStorage.getItem("jarvis.settingsPane"); if (p && document.querySelector(`#set-nav [data-pane="${CSS.escape(p)}"]`)) setPane = p; } catch {}
+  function showPane(id) {
+    setPane = id;
+    for (const sec of $("set-panes").querySelectorAll(".pane")) sec.hidden = sec.id !== id;
+    for (const b of $("set-nav").querySelectorAll("[data-pane]")) b.setAttribute("aria-current", String(b.dataset.pane === id));
+    $("set-panes").scrollTop = 0;
+    try { localStorage.setItem("jarvis.settingsPane", id); } catch {}
+    if (id === "mcp") mcpRefresh();
+  }
+  function openDrawer(pane) {
+    closeInbox();
     $("drawer").classList.add("open");
     $("scrim").style.display = "block";
-    if ($("mcp").open) mcpRefresh();
+    showPane(typeof pane === "string" ? pane : setPane);
     loadModelSettings(false);
     loadVoiceSettings();
   }
@@ -1916,7 +1971,24 @@
     $("drawer").classList.remove("open");
     $("scrim").style.display = "none";
   }
-  $("drawer-btn").onclick = openDrawer;
+  $("drawer-btn").onclick = () => openDrawer();
+  for (const b of $("set-nav").querySelectorAll("[data-pane]")) b.onclick = () => showPane(b.dataset.pane);
+  // Search: keep the sections whose text mentions every word you type.
+  $("set-search").oninput = () => {
+    const words = $("set-search").value.toLowerCase().split(/\s+/).filter(Boolean);
+    let first = null;
+    for (const b of $("set-nav").querySelectorAll("[data-pane]")) {
+      const text = `${b.textContent} ${$(b.dataset.pane).textContent}`.toLowerCase();
+      b.hidden = !words.every((w) => text.includes(w));
+      if (!b.hidden && !first) first = b.dataset.pane;
+    }
+    for (const g of $("set-nav").querySelectorAll(".grp")) {
+      let n = g.nextElementSibling, any = false;
+      while (n && !n.classList.contains("grp")) { if (!n.hidden) any = true; n = n.nextElementSibling; }
+      g.hidden = !any;
+    }
+    if (first && $("set-nav").querySelector(`[data-pane="${setPane}"]`).hidden) showPane(first);
+  };
   // Workspaces: the rail switches what fills the shell; the last one sticks.
   function showView(view) {
     document.body.dataset.view = view;
@@ -2529,9 +2601,7 @@
     if (!$("meet").classList.contains("on") && !$("meeting").classList.contains("setup")) $("meet").click();
   };
   $("mtg-prefs").onclick = () => {
-    openDrawer();
-    $("meetings-settings").open = true;
-    setTimeout(() => $("meetings-settings").scrollIntoView({ block: "start" }), 60);
+    openDrawer("meetings-settings");
   };
   function paintMtgKeep(days) {
     $("mtg-keep").textContent = !days || days === "forever" ? "Recordings are kept until you delete them." : `Audio is kept ${days} days, then deleted; transcripts and notes stay.`;
@@ -2623,7 +2693,7 @@
     $("slack-setup").style.display = live ? "none" : "block";
     $("slack-live").style.display = live ? "block" : "none";
     const label = { connected: "connected", connecting: "connecting…", error: "error", off: "off" }[st.state] ?? st.state;
-    $("slack-sum").textContent = live ? `· ${st.paired ? "paired" : label}` : "";
+    $("slack-sum").textContent = live ? (st.paired ? "paired" : label) : "";
     $("slack-state").textContent = live ? `${label}${st.team ? ` to ${st.team}` : ""}${st.error ? ` — ${st.error}` : ""}` : "";
     const pair = $("slack-pair");
     pair.style.display = live && !st.paired && st.pairCode ? "block" : "none";
@@ -2664,7 +2734,7 @@
     if (!view) return;
     cnView = view;
     const on = view.rows.filter((r) => r.enabled && r.status === "connected").length;
-    $("cn-sum").textContent = on ? `· ${on} connected` : "";
+    $("cn-sum").textContent = on ? `${on} on` : "";
     const list = $("cn-list");
     list.innerHTML = "";
     for (const r of view.rows) {
@@ -2729,8 +2799,7 @@
   }
   window.jarvis?.onConnectors?.(({ view }) => paintConnectors(view));
   window.jarvis?.onConnectorsOpen?.(({ id }) => {
-    openDrawer();
-    $("connector-settings").open = true;
+    openDrawer("connector-settings");
     cnOpen = id;
     paintConnectors(cnView);
     setTimeout(() => $(`cn-${id}`)?.scrollIntoView({ block: "center" }), 60);
@@ -2742,7 +2811,7 @@
     if (!v) return;
     $("au-on").checked = !!v.enabled;
     $("au-preset").value = v.preset;
-    $("au-sum").textContent = v.enabled ? `· ${v.preset}, ${v.today} auto today` : "· paused";
+    $("au-sum").textContent = v.enabled ? v.preset : "paused";
     const grid = $("au-classes");
     grid.innerHTML = "";
     for (const c of v.classes) {
@@ -2789,7 +2858,7 @@
   // Playbooks panel: install / pause / remove delegated operations.
   function paintPlaybooks(list) {
     if (!list) return;
-    $("pb-sum").textContent = list.some((p) => p.installed) ? `· ${list.filter((p) => p.installed).length} on` : "";
+    $("pb-sum").textContent = list.some((p) => p.installed) ? `${list.filter((p) => p.installed).length} on` : "";
     const root = $("pb-list");
     root.innerHTML = "";
     let team = null;
@@ -2899,11 +2968,10 @@
       const r = await window.jarvis.mcpList();
       const rows = (r.servers ?? []).map((s) => `${s.name}: ${s.status?.status ?? "unknown"}`);
       $("mcp-list").textContent = rows.join("\n") || "(none)";
-      $("mcp-sum").textContent = rows.length ? `— ${rows.length} server${rows.length === 1 ? "" : "s"}` : "";
+      $("mcp-sum").textContent = rows.length ? String(rows.length) : "";
     } catch (e) { $("mcp-list").textContent = String(e.message ?? e); }
   }
   $("mcp-refresh").onclick = mcpRefresh;
-  $("mcp").addEventListener("toggle", () => { if ($("mcp").open) mcpRefresh(); });
 
   sizeCanvas();
   layoutTargets();
