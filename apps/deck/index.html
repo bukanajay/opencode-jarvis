@@ -135,15 +135,27 @@
     #set-nav { flex: 0 0 auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
     #set-panes { padding: 20px 16px; }
   }
-  /* Decision inbox: everything waiting on you, one queue. */
-  #inbox-panel {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
-    width: min(420px, 94vw); padding: 16px;
-    background: var(--panel); border-left: 1px solid var(--line);
-    transform: translateX(105%); transition: transform 180ms ease;
-    overflow-y: auto; display: grid; gap: 10px; align-content: start;
-  }
-  #inbox-panel.open { transform: none; }
+  /* Pages: Inbox, Automations and Activity fill the shell like the deck. */
+  .view.page { display: none; flex: 1; min-height: 0; overflow-y: auto; flex-direction: column; gap: 14px; padding: 4px 4px 12px; }
+  body[data-view="inbox"] #inbox-view, body[data-view="auto"] #auto-view, body[data-view="activity"] #act-view { display: flex; }
+  .page-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; }
+  .page-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0; }
+  .page-head .lead { margin: 2px 0 0; color: #a9bab2; max-width: 720px; }
+  #inbox-list { display: grid; gap: 10px; max-width: 860px; }
+  #pb-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  #pb-list .cn-row { margin: 0; }
+  #pb-list .pb-team { grid-column: 1 / -1; margin-top: 6px; }
+  .chip { padding: 6px 12px; border-radius: 999px; background: transparent; border: 1px solid var(--line); color: #b9c8c1; font: 500 12px var(--body); }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #act-list { max-width: 980px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); padding: 2px 16px; }
+  .act-row { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid rgba(120, 150, 140, 0.09); font-size: 13.5px; }
+  .act-row:last-child { border-bottom: 0; }
+  .act-row .at { font-family: var(--cap); font-size: 11px; color: #8a9d94; width: 112px; }
+  .act-row .k { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; width: 84px; }
+  .act-row .k.autonomy { color: #7dd3fc; } .act-row .k.settings { color: #ffcf6b; } .act-row .k.meeting { color: #ff9f5d; }
+  .act-row .t { flex: 1 1 320px; min-width: 0; word-break: break-word; }
+  .act-row.deny .t { color: #ff8a8a; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; }
   #inbox-btn { position: relative; }
   #inbox-badge { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--danger); color: #fff; font: 600 10.5px/17px var(--body); text-align: center; display: none; }
   #inbox-badge.on { display: block; }
@@ -167,8 +179,6 @@
   .au-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; font-size: 12.5px; }
   .au-grid select { padding: 4px 6px; }
   .au-lock { color: var(--dim); font-family: var(--cap); font-size: 10.5px; }
-  .au-log { font-family: var(--cap); font-size: 11px; color: var(--dim); display: grid; gap: 3px; max-height: 180px; overflow: auto; }
-  .au-log .deny { color: var(--danger); }
   .pb-team { font-family: var(--cap); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-top: 10px; }
   @media (max-width: 860px) { .deck { grid-template-columns: 1fr; } }
   #ring-wrap { position: relative; }
@@ -351,7 +361,6 @@
     padding: 10px 12px; max-height: 220px; overflow: auto;
     font-family: var(--cap); font-size: 12px; white-space: pre-wrap; margin: 0;
   }
-  #audit { min-height: 44px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   /* Shell: a rail of workspaces on the left; one workspace shows at a time. */
   #shell { flex: 1; min-height: 0; display: flex; }
@@ -373,7 +382,7 @@
   #h-rec .rec { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: mtblink 1.4s ease-in-out infinite; }
   body.recording #h-rec { display: inline-flex; }
   #mtg-view { display: none; flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(180deg, var(--panel2), var(--panel)); overflow: hidden; }
-  body[data-view="meetings"] .deck { display: none; }
+  body[data-view]:not([data-view="deck"]) .deck { display: none; }
   body[data-view="meetings"] #mtg-view { display: flex; }
   body[data-view="meetings"] main { max-width: 1340px; }
   #mtg-side { flex: 0 0 340px; display: flex; flex-direction: column; gap: 10px; padding: 18px 16px; border-right: 1px solid var(--line); min-height: 0; }
@@ -440,8 +449,10 @@
 <div id="shell">
 <nav id="rail" aria-label="Workspaces">
   <button type="button" id="nav-deck" data-view="deck" aria-current="page" title="Deck: Jarvis, the fleet and the transcript"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Deck</button>
+  <button type="button" id="inbox-btn" data-view="inbox" title="Inbox: everything waiting on you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox<span id="inbox-badge"></span></button>
   <button type="button" id="nav-meetings" data-view="meetings" title="Meetings: notes, transcripts and who was there"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2z"/><path d="M3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg>Meetings</button>
-  <button type="button" id="inbox-btn" title="Decision inbox: everything waiting on you" aria-label="Open decision inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox<span id="inbox-badge"></span></button>
+  <button type="button" id="nav-auto" data-view="auto" title="Automations: playbooks Jarvis runs for you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>Automate</button>
+  <button type="button" id="nav-activity" data-view="activity" title="Activity: what Jarvis did on its own, settings changes, meetings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>Activity</button>
   <span class="spacer"></span>
   <button type="button" id="drawer-btn" title="Settings (models, voice, MCP, audit)" aria-label="Open system panels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
 </nav>
@@ -532,6 +543,26 @@
     </div>
   </div>
 
+  <div id="inbox-view" class="view page" aria-label="Inbox">
+    <div class="page-head"><div><h1>Inbox</h1><p class="lead">Everything waiting on you: permissions, questions, config changes and branches ready to land.</p></div><button class="ghost" id="brief-btn" type="button" title="Brief me now">Brief me</button></div>
+    <div id="inbox-list"></div>
+  </div>
+  <div id="auto-view" class="view page" aria-label="Automations">
+    <div class="page-head"><div><h1>Automations <span class="res" id="pb-sum"></span></h1><p class="lead">Operations you hand to Jarvis once. Anything that changes something arrives as a branch or a draft in your Inbox.</p></div><button class="ghost" id="auto-au" type="button" title="What workers may do without asking you">Autonomy: <b id="auto-au-preset">…</b></button></div>
+    <div id="pb-list"></div>
+    <div class="res" id="pb-note"></div>
+  </div>
+  <div id="act-view" class="view page" aria-label="Activity">
+    <div class="page-head"><div><h1>Activity</h1><p class="lead">What Jarvis decided on its own, every settings change, and saved meetings. Settings change by voice too: “use the amber accent”, “set density to compact”, “dim the fleet”.</p></div></div>
+    <div class="row" id="act-filters">
+      <button type="button" class="chip" data-kind="all" aria-pressed="true">All</button>
+      <button type="button" class="chip" data-kind="autonomy" aria-pressed="false">Autonomy</button>
+      <button type="button" class="chip" data-kind="settings" aria-pressed="false">Settings</button>
+      <button type="button" class="chip" data-kind="meeting" aria-pressed="false">Meetings</button>
+    </div>
+    <div id="act-list" aria-live="polite"></div>
+  </div>
+
   <div id="perm-slot"></div>
   <div id="cfg-slot"></div>
   <div id="frm-slot"></div>
@@ -581,16 +612,6 @@
       </div>
     </div>
   </div>
-  <aside id="inbox-panel" aria-label="Decision inbox">
-    <div class="row" style="justify-content:space-between;">
-      <span class="tele">decision inbox</span>
-      <div class="row" style="gap:8px">
-        <button class="ghost" id="brief-btn" type="button" title="Brief me now">Brief me</button>
-        <button class="ghost icon" id="inbox-x" aria-label="Close inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-      </div>
-    </div>
-    <div id="inbox-list"></div>
-  </aside>
   <aside id="drawer" role="dialog" aria-modal="true" aria-label="Settings">
     <nav id="set-nav" aria-label="Settings sections">
       <div class="row" style="justify-content:space-between;padding:0 4px 10px"><span class="title">Settings</span><button type="button" class="ghost" id="drawer-x">Done</button></div>
@@ -602,14 +623,11 @@
       <div class="grp">Jarvis</div>
       <button type="button" data-pane="model-settings"><span>Models</span></button>
       <button type="button" data-pane="autonomy-settings"><span>Autonomy</span><span class="hint" id="au-sum"></span></button>
-      <button type="button" data-pane="playbook-settings"><span>Playbooks</span><span class="hint" id="pb-sum"></span></button>
       <button type="button" data-pane="meetings-settings"><span>Meetings</span></button>
       <div class="grp">Connections</div>
       <button type="button" data-pane="slack-settings"><span>Slack</span><span class="hint" id="slack-sum"></span></button>
       <button type="button" data-pane="connector-settings"><span>Connectors</span><span class="hint" id="cn-sum"></span></button>
       <button type="button" data-pane="mcp"><span>MCP servers</span><span class="hint" id="mcp-sum"></span></button>
-      <div class="grp">App</div>
-      <button type="button" data-pane="audit-details"><span>Settings history</span></button>
     </nav>
     <div id="set-panes">
     <section class="pane" id="profile-settings" hidden>
@@ -677,17 +695,8 @@
     <div class="au-grid" id="au-classes"></div>
     <p class="res" style="margin-top:10px">Rules</p>
     <div id="au-rules" class="res"></div>
-    <p class="res" style="margin-top:10px">Recent decisions</p>
-    <div class="au-log" id="au-log"></div>
+    <p class="res" style="margin-top:10px">What Jarvis decided on its own is in <button type="button" class="linkish" id="au-activity">Activity</button>.</p>
     <div class="res" id="au-note"></div>
-      </div>
-    </section>
-    <section class="pane" id="playbook-settings" hidden>
-      <h1>Playbooks</h1>
-      <div class="body">
-    <p class="res">Operations you hand to Jarvis once. Anything that changes something arrives as a branch or a draft in your inbox.</p>
-    <div id="pb-list"></div>
-    <div class="res" id="pb-note"></div>
       </div>
     </section>
     <section class="pane" id="meetings-settings" hidden>
@@ -738,14 +747,6 @@
       <div class="body">
     <div class="res" id="mcp-list"></div>
     <p class="row"><button class="ghost" id="mcp-refresh">Refresh</button></p>
-      </div>
-    </section>
-    <section class="pane" id="audit-details" hidden>
-      <h1>Settings history</h1>
-      <p class="lead">Every settings change, by voice or by hand.</p>
-      <div class="body">
-    <div class="res" id="audit" aria-live="polite" style="white-space:pre-wrap;min-height:44px;"></div>
-    <p><span class="res">Voice or type: “use the amber accent”, “set density to compact”, “dim the fleet”. Applied next frame, survives restart.</span></p>
       </div>
     </section>
     </div>
@@ -1354,7 +1355,35 @@
   window.jarvis?.onCaptionFinal(({ text }) => { cap.textContent = text; $("vb-cap").textContent = text; addYou(text, { name: "You · speech" }); showWorking(); });
   window.jarvis?.onAudioError(({ message }) => { cap.textContent = message; sndFault(); });
 
-  const auditEl = () => document.getElementById("audit");
+  // Activity: settings changes, what autonomy decided, and saved meetings, newest first.
+  const activity = { settings: [], autonomy: [], meetings: [], kind: "all" };
+  function paintActivity() {
+    const rows = [...activity.settings, ...activity.autonomy, ...activity.meetings]
+      .filter((r) => activity.kind === "all" || r.kind === activity.kind)
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+      .slice(0, 300);
+    const list = $("act-list");
+    list.innerHTML = "";
+    if (!rows.length) { list.append(Object.assign(document.createElement("p"), { className: "res", textContent: "Nothing here yet." })); return; }
+    for (const r of rows) {
+      const row = document.createElement("div");
+      row.className = `act-row${r.deny ? " deny" : ""}`;
+      const at = new Date(r.at);
+      const when = at.toDateString() === new Date().toDateString() ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : at.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      row.append(Object.assign(document.createElement("span"), { className: "at", textContent: when }),
+        Object.assign(document.createElement("span"), { className: `k ${r.kind}`, textContent: r.kind }),
+        Object.assign(document.createElement("span"), { className: "t", textContent: r.text }));
+      list.append(row);
+    }
+  }
+  const settingsActivity = (e) => ({ kind: "settings", at: new Date(e.at).toISOString(), text: `${e.bucket}: ${e.what}${e.needsRestart ? " (restart needed)" : ""}` });
+  for (const b of $("act-filters").querySelectorAll("[data-kind]")) {
+    b.onclick = () => {
+      activity.kind = b.dataset.kind;
+      for (const x of $("act-filters").querySelectorAll("[data-kind]")) x.setAttribute("aria-pressed", String(x === b));
+      paintActivity();
+    };
+  }
   let ACC = { phosphor: "#c8f04a" };
   function paintSettings(s) {
     if (s.accent && ACC[s.accent]) document.documentElement.style.setProperty("--accent", ACC[s.accent]);
@@ -1362,13 +1391,10 @@
     document.body.dataset.density = s.density ?? "";
     document.body.dataset.layout = s.layout ?? "";
   }
-  function auditRow(e) {
-    return `[${new Date(e.at).toLocaleTimeString()}] ${e.bucket}: ${e.what}${e.needsRestart ? " (restart needed)" : ""}`;
-  }
   window.jarvis?.onSettings(({ entry, settings }) => {
     paintSettings(settings);
-    const el = auditEl();
-    if (el) el.textContent += auditRow(entry) + "\n";
+    activity.settings.push(settingsActivity(entry));
+    paintActivity();
     addSys(`settings · ${entry.what} — live`);
     sndDone();
   });
@@ -1378,8 +1404,8 @@
     paintSettings(r.settings);
     paintVoice(r.settings);
     if (r.settings.defaultAgent) defaultAgent = r.settings.defaultAgent;
-    const el = auditEl();
-    if (el) el.textContent = (r.audit ?? []).map(auditRow).join("\n") + "\n";
+    activity.settings = (r.audit ?? []).map(settingsActivity);
+    paintActivity();
   });
   let defaultAgent = "build";
   // Voice layout: voice mode hides the transcript (voice-focus) unless the
@@ -1730,8 +1756,7 @@
   window.jarvis?.onConfigApplied(({ entry, note }) => {
     cfgHide(); sndDone();
     addSys(`config · ${entry.what} — ${note ?? "live"}`);
-    const el = document.getElementById("audit");
-    if (el && entry) el.textContent += `[${new Date(entry.at).toLocaleTimeString()}] ${entry.bucket}: ${entry.what}\n`;
+    if (entry) { activity.settings.push(settingsActivity(entry)); paintActivity(); }
   });
   window.jarvis?.onConfigDiscarded(() => { cfgHide(); addSys("config · discarded, nothing written"); });
   $("cfg-yes").onclick = async () => { await window.jarvis.configConfirm($("cfg").dataset.pendingID, true); cfgHide(); };
@@ -1960,7 +1985,6 @@
     if (id === "mcp") mcpRefresh();
   }
   function openDrawer(pane) {
-    closeInbox();
     $("drawer").classList.add("open");
     $("scrim").style.display = "block";
     showPane(typeof pane === "string" ? pane : setPane);
@@ -1997,6 +2021,7 @@
     }
     try { localStorage.setItem("jarvis.view", view); } catch {}
     if (view === "meetings") paintMeetings().catch(() => {});
+    if (view === "inbox") window.jarvis?.inboxList?.().then((r) => paintInbox(r.items ?? [])).catch(() => {});
   }
   for (const b of $("rail").querySelectorAll("[data-view]")) b.onclick = () => showView(b.dataset.view);
   $("h-rec").onclick = () => showView("deck");
@@ -2452,6 +2477,8 @@
   }
   async function paintMeetings() {
     mtgAll = (await window.jarvis.meetingList().catch(() => [])).filter((m) => m.status === "done");
+    activity.meetings = mtgAll.map((m) => ({ kind: "meeting", at: m.startedAt, text: `${m.title || "Untitled meeting"} · ${Math.max(1, Math.round((m.seconds ?? 0) / 60))} min${mtgWho(m).length ? ` · ${mtgWho(m).join(", ")}` : ""}` }));
+    paintActivity();
     $("mtg-empty").hidden = mtgAll.length > 0;
     if (mtgSel && !mtgAll.some((m) => m.id === mtgSel)) mtgSel = null;
     if (!mtgSel && mtgAll.length) mtgSel = mtgAll[0].id;
@@ -2607,7 +2634,6 @@
     $("mtg-keep").textContent = !days || days === "forever" ? "Recordings are kept until you delete them." : `Audio is kept ${days} days, then deleted; transcripts and notes stay.`;
   }
   paintMeetings().catch(() => {});
-  try { if (localStorage.getItem("jarvis.view") === "meetings") showView("meetings"); } catch {}
   $("people-name").onclick = async () => {
     $("people-note").textContent = "looking…";
     const r = await window.jarvis.meetingNextToName();
@@ -2645,7 +2671,7 @@
         b.onclick = async () => {
           b.disabled = true;
           const r = await window.jarvis.inboxAct(it.id, a).catch((e) => ({ ok: false, reason: e.message }));
-          if (a === "open") closeInbox();
+          if (a === "open") showView("deck"); // its card is on the deck
           if (!r.ok) { d.textContent = r.reason ?? "failed"; b.disabled = false; }
         };
         row.appendChild(b);
@@ -2656,15 +2682,9 @@
       list.appendChild(el);
     }
   }
-  function openInbox() { closeDrawer(); $("inbox-panel").classList.add("open"); $("scrim").style.display = "block"; window.jarvis?.inboxList?.().then((r) => paintInbox(r.items ?? [])).catch(() => {}); }
-  function closeInbox() { $("inbox-panel").classList.remove("open"); if (!$("drawer").classList.contains("open")) $("scrim").style.display = "none"; }
-  $("inbox-btn").onclick = openInbox;
-  $("inbox-x").onclick = closeInbox;
-  $("scrim").addEventListener("click", closeInbox);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeInbox(); });
-  $("brief-btn").onclick = () => { closeInbox(); window.jarvis?.briefNow?.(); };
+  $("brief-btn").onclick = () => { showView("deck"); window.jarvis?.briefNow?.(); }; // the brief lands in the transcript
   window.jarvis?.onInbox?.(({ items }) => paintInbox(items ?? []));
-  window.jarvis?.onInboxOpen?.(() => openInbox());
+  window.jarvis?.onInboxOpen?.(() => { closeDrawer(); showView("inbox"); });
   window.jarvis?.inboxList?.().then((r) => paintInbox(r.items ?? [])).catch(() => {});
   // Start at login (menu bar, hidden window).
   window.jarvis?.settingsGet?.().then((s) => {
@@ -2834,18 +2854,15 @@
       x.onclick = () => auChange({ op: "removeRule", id: r.id });
       row.append(t, x); rules.appendChild(row);
     }
-    const log = $("au-log");
-    log.innerHTML = "";
-    for (const d of v.recent) {
-      if (d.decision === "policy") continue;
-      const e = document.createElement("div");
-      e.className = d.decision === "deny" ? "deny" : "";
-      const when = new Date(d.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      e.textContent = `${when} ${d.by === "jarvis" ? "auto" : "you"} ${d.decision} · ${d.class ?? ""} ${String(d.what ?? d.signature ?? "").slice(0, 60)}`;
-      log.appendChild(e);
-    }
-    if (!log.children.length) log.textContent = "Nothing yet.";
+    $("auto-au-preset").textContent = v.enabled ? v.preset : "paused";
+    activity.autonomy = v.recent.filter((d) => d.decision !== "policy").map((d) => ({
+      kind: "autonomy", at: new Date(d.at).toISOString(), deny: d.decision === "deny",
+      text: `${d.by === "jarvis" ? "Jarvis" : "You"}: ${d.decision} · ${d.class ?? ""} ${String(d.what ?? d.signature ?? "").slice(0, 120)}`,
+    }));
+    paintActivity();
   }
+  $("au-activity").onclick = () => { closeDrawer(); showView("activity"); };
+  $("auto-au").onclick = () => openDrawer("autonomy-settings");
   async function auChange(change) {
     try { paintAutonomy(await window.jarvis.autonomyChange(change)); $("au-note").textContent = ""; }
     catch (e) { $("au-note").textContent = String(e.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ""); window.jarvis.autonomyGet().then(paintAutonomy); }
@@ -2972,6 +2989,8 @@
     } catch (e) { $("mcp-list").textContent = String(e.message ?? e); }
   }
   $("mcp-refresh").onclick = mcpRefresh;
+
+  try { const v = localStorage.getItem("jarvis.view"); if (v && $("rail").querySelector(`[data-view="${CSS.escape(v)}"]`)) showView(v); } catch {}
 
   sizeCanvas();
   layoutTargets();
