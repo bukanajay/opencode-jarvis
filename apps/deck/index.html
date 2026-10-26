@@ -338,6 +338,78 @@
   }
   #audit { min-height: 44px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* Shell: a rail of workspaces on the left; one workspace shows at a time. */
+  #shell { flex: 1; min-height: 0; display: flex; }
+  #shell > main { flex: 1; min-width: 0; }
+  #rail {
+    flex: 0 0 76px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 12px 0; border-right: 1px solid var(--line); background: rgba(5, 8, 10, 0.6);
+  }
+  #rail .spacer { flex: 1; }
+  #rail button {
+    position: relative; width: 62px; padding: 9px 0 7px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    background: transparent; border: 0; border-radius: 10px; color: #8a9d94; font: 500 11px/1.2 var(--body);
+  }
+  #rail button svg { width: 20px; height: 20px; }
+  #rail button:hover { color: var(--ink); filter: none; }
+  #rail button[aria-current="page"] { background: #15201b; color: var(--accent); }
+  #inbox-badge { top: 2px; right: 8px; }
+  #h-rec { display: none; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11px; border-color: #5a2a2a; color: #ffb4b4; }
+  #h-rec .rec { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: mtblink 1.4s ease-in-out infinite; }
+  body.recording #h-rec { display: inline-flex; }
+  #mtg-view { display: none; flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: 10px; background: linear-gradient(180deg, var(--panel2), var(--panel)); overflow: hidden; }
+  body[data-view="meetings"] .deck { display: none; }
+  body[data-view="meetings"] #mtg-view { display: flex; }
+  body[data-view="meetings"] main { max-width: 1340px; }
+  #mtg-side { flex: 0 0 340px; display: flex; flex-direction: column; gap: 10px; padding: 18px 16px; border-right: 1px solid var(--line); min-height: 0; }
+  #mtg-side h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: 0; }
+  #mtg-search { flex: 0 0 auto; }
+  #mtg-items { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 2px; align-content: start; }
+  #mtg-items .grp { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a9d94; margin: 10px 4px 4px; }
+  #mtg-items button {
+    display: grid; gap: 1px; width: 100%; text-align: left; padding: 9px 10px; border-radius: 9px;
+    background: transparent; border: 1px solid transparent; color: var(--ink); font: 400 13px/1.4 var(--body);
+  }
+  #mtg-items button:hover { border-color: var(--line); filter: none; }
+  #mtg-items button[aria-current="true"] { background: #15201b; border-color: #33421c; }
+  #mtg-items button b { font-weight: 600; font-size: 13.5px; }
+  #mtg-items button span { color: #8a9d94; font-size: 12px; }
+  #mtg-items button i { font-style: normal; color: var(--accent); font-size: 12px; }
+  #mtg-foot { color: #8a9d94; font-size: 12px; }
+  #mtg-foot button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; }
+  #mtg-main { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 22px 28px; display: flex; flex-direction: column; gap: 14px; }
+  #mtg-main .empty { color: #8a9d94; margin: auto; text-align: center; max-width: 420px; }
+  #mtg-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+  #mtg-head .t { flex: 1 1 280px; min-width: 0; }
+  #mtg-head h2 { margin: 0; font: 600 22px/1.3 var(--body); letter-spacing: 0; text-transform: none; color: var(--ink); }
+  #mtg-head .meta { color: #a9bab2; font-size: 13px; }
+  #mtg-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--line); }
+  #mtg-tabs button { background: none; border: 0; border-radius: 0; padding: 9px 2px; color: #8a9d94; font: 500 13px var(--body); }
+  #mtg-tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+  #mtg-pane .card2 { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  #mtg-pane .note { color: #a9bab2; font-size: 13px; }
+  #mtg-notes { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  #mtg-notes .wide { grid-column: 1 / -1; }
+  #mtg-notes h4 { margin: 0 0 6px; font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a9d94; font-weight: 600; }
+  #mtg-notes ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+  #mtg-notes li button { margin-left: 8px; font-size: 11px; padding: 2px 8px; }
+  #mtg-lines-all { display: grid; gap: 6px; font-size: 13.5px; }
+  #mtg-lines-all .at { font-family: var(--cap); font-size: 11px; color: #8a9d94; margin-right: 8px; }
+  #mtg-lines-all .who { font-weight: 600; margin-right: 6px; }
+  #mtg-lines-all .you .who { color: var(--accent); }
+  .mtg-sp { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .mtg-sp:last-child { border-bottom: 0; }
+  .mtg-sp .lbl { flex: 1 1 200px; min-width: 0; }
+  .mtg-sp .lbl span { display: block; color: #8a9d94; font-size: 12px; font-style: italic; }
+  .mtg-sp input { flex: 0 1 200px; min-width: 0; }
+  @media (max-width: 860px) {
+    #shell { flex-direction: column; }
+    #rail { flex: 0 0 auto; flex-direction: row; justify-content: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px; }
+    #rail .spacer { display: none; }
+    #mtg-view { flex-direction: column; overflow: auto; }
+    #mtg-side { flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    #mtg-items { max-height: 260px; }
+  }
 </style>
 </head>
 <body>
@@ -347,10 +419,17 @@
   <span class="tele">model <b id="h-model">luna*</b></span>
   <span class="tele" id="h-state"><span class="pulse"></span> idle</span>
   <span style="flex:1"></span>
-  <button class="ghost icon" id="inbox-btn" title="Decision inbox: everything waiting on you" aria-label="Open decision inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span id="inbox-badge"></span></button>
-  <button class="ghost icon" id="drawer-btn" title="Settings (models, voice, MCP, audit)" aria-label="Open system panels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+  <button type="button" class="ghost" id="h-rec" title="A meeting is being recorded: open it on the deck"><span class="rec"></span><span id="h-rec-clock">recording</span></button>
 </header>
 <div id="project-menu" role="menu" aria-label="Projects"></div>
+<div id="shell">
+<nav id="rail" aria-label="Workspaces">
+  <button type="button" id="nav-deck" data-view="deck" aria-current="page" title="Deck: Jarvis, the fleet and the transcript"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>Deck</button>
+  <button type="button" id="nav-meetings" data-view="meetings" title="Meetings: notes, transcripts and who was there"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2z"/><path d="M3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg>Meetings</button>
+  <button type="button" id="inbox-btn" title="Decision inbox: everything waiting on you" aria-label="Open decision inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Inbox<span id="inbox-badge"></span></button>
+  <span class="spacer"></span>
+  <button type="button" id="drawer-btn" title="Settings (models, voice, MCP, audit)" aria-label="Open system panels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
+</nav>
 <main>
   <div class="deck">
     <section class="fleet">
@@ -410,6 +489,32 @@
       <div id="staged" class="res" style="display:none;margin-top:6px;"></div>
       <datalist id="cmds"></datalist>
     </section>
+  </div>
+
+  <div id="mtg-view" aria-label="Meetings">
+    <aside id="mtg-side">
+      <div class="row" style="justify-content:space-between"><h1>Meetings</h1><button type="button" id="mtg-start" title="Start taking notes for a call">Start</button></div>
+      <input id="mtg-search" type="search" placeholder="Search titles and people" aria-label="Search meetings" autocomplete="off" spellcheck="false" />
+      <div id="mtg-items"></div>
+      <div id="mtg-foot"><span id="mtg-keep"></span> <button type="button" id="mtg-prefs">Meeting settings</button></div>
+    </aside>
+    <div id="mtg-main">
+      <div class="empty" id="mtg-empty">No meetings yet. Press Start when a call begins (or let Jarvis offer it), and its notes, transcript and speakers show up here. Everything is recorded and transcribed on this Mac.</div>
+      <div id="mtg-detail" hidden>
+        <div id="mtg-head">
+          <div class="t"><h2 id="mtg-title"></h2><div class="meta" id="mtg-meta"></div></div>
+          <button type="button" id="mtg-discuss" title="Jarvis sees this meeting's transcript for the next 30 minutes">Discuss with Jarvis</button>
+          <button type="button" class="ghost" id="mtg-redo" title="Transcribe this meeting again with both engines, keeping Parakeet's English and Whisper's Hinglish line by line, on this Mac. The old transcript and notes are kept beside the new ones.">Redo in English + Hinglish</button>
+        </div>
+        <div id="mtg-tabs" role="tablist">
+          <button type="button" role="tab" data-tab="notes" aria-selected="true">Notes</button>
+          <button type="button" role="tab" data-tab="transcript" aria-selected="false">Transcript</button>
+          <button type="button" role="tab" data-tab="people" aria-selected="false">People</button>
+        </div>
+        <div id="mtg-pane" role="tabpanel" style="padding-top:12px"></div>
+        <div class="res" id="mtg-note"></div>
+      </div>
+    </div>
   </div>
 
   <div id="perm-slot"></div>
@@ -513,14 +618,13 @@
   <details id="meetings-settings" open>
     <summary>Meetings</summary>
     <div class="body">
-    <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click.</p>
+    <p class="res">Recorded and transcribed on this Mac. Notes and Discuss send that one meeting's transcript to Jarvis's model, only when you click. Your meetings are in the Meetings workspace on the left.</p>
     <p><label class="res" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="set-meetingPrompt" style="width:auto" /> Offer meeting mode when a call starts (never records on its own)</label></p>
     <p class="row"><label class="res" for="set-meetingAudioDays">Keep recordings</label>
       <select id="set-meetingAudioDays">
         <option value="forever">forever</option><option value="90">90 days</option><option value="30">30 days</option><option value="7">7 days</option>
       </select>
       <span class="res">then delete the audio; transcripts, notes and voices stay</span></p>
-    <div id="meetings-list"></div>
     </div>
   </details>
   <details id="slack-settings" open>
@@ -623,6 +727,7 @@
     <div id="frm-fields" class="res"></div>
   </section>
 </main>
+</div>
 <script>
   const $ = (id) => document.getElementById(id);
   const ring = $("ring"), log = $("log"), cap = $("caption");
@@ -1394,12 +1499,14 @@
   function paintMeeting(mode, startedAt) {
     $("meeting").className = mode;
     $("meet").classList.toggle("on", mode === "on");
+    document.body.classList.toggle("recording", mode === "on");
     clearInterval(meetingClock);
     if (mode === "on") {
       const t0 = startedAt ? Date.parse(startedAt) : Date.now();
       const tick = () => {
         const s = Math.max(0, Math.floor((Date.now() - t0) / 1000));
         $("mt-clock").textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+        $("h-rec-clock").textContent = `recording · ${$("mt-clock").textContent}`;
       };
       tick();
       meetingClock = setInterval(tick, 1000);
@@ -1532,6 +1639,7 @@
       $("mt-offer").textContent = app.browser ? `${app.name} is using your microphone. A call?` : `${app.name} call started.`;
       $("mt-cancel").textContent = "Not now";
       paintMeeting("setup");
+      showView("deck"); // the offer lives on the deck; don't let it go unseen
     } else if (kind === "stop" && $("meeting").classList.contains("on")) {
       $("mt-status").textContent = `${app.name} call ended · press Stop to save`;
       addSys(`${app.name} call ended. Press Stop in the meeting panel to save the meeting.`);
@@ -1809,6 +1917,17 @@
     $("scrim").style.display = "none";
   }
   $("drawer-btn").onclick = openDrawer;
+  // Workspaces: the rail switches what fills the shell; the last one sticks.
+  function showView(view) {
+    document.body.dataset.view = view;
+    for (const b of $("rail").querySelectorAll("[data-view]")) {
+      if (b.dataset.view === view) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    }
+    try { localStorage.setItem("jarvis.view", view); } catch {}
+    if (view === "meetings") paintMeetings().catch(() => {});
+  }
+  for (const b of $("rail").querySelectorAll("[data-view]")) b.onclick = () => showView(b.dataset.view);
+  $("h-rec").onclick = () => showView("deck");
   $("drawer-x").onclick = closeDrawer;
   $("scrim").onclick = closeDrawer;
   // Models panel: selects fed by the server lists, applied through app.command
@@ -2189,18 +2308,28 @@
     }
   }
   paintPeople().catch(() => {});
-  // Phase 5: your recent meetings, their notes, and talking about one.
+  // Meetings workspace: every saved meeting on the left; the one you pick on
+  // the right, as notes, its transcript, and the people on it.
   const mtgWhen = (iso) => new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const mtgClock = (sec) => `${String(Math.floor((sec ?? 0) / 60)).padStart(2, "0")}:${String(Math.floor((sec ?? 0) % 60)).padStart(2, "0")}`;
+  const mtgWho = (m) => (m.speakers ?? []).map((s) => s.label).filter((l) => l && !/^(Them|Speaker [A-Z])$/.test(l));
+  const MTG_LANG = { parakeet: "English", whisper: "Hindi + Hinglish", hybrid: "English + Hinglish" };
+  let mtgAll = [], mtgSel = null, mtgTab = "notes";
   function renderNotes(box, m, summary) {
     box.innerHTML = "";
-    const add = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; box.append(el); return el; };
-    add("div", summary.summary);
-    const list = (title, rows, line) => {
+    const card = (title, wide) => {
+      const c = document.createElement("div");
+      c.className = `card2${wide ? " wide" : ""}`;
+      if (title) c.append(Object.assign(document.createElement("h4"), { textContent: title }));
+      box.append(c);
+      return c;
+    };
+    card("Summary", true).append(summary.summary);
+    const list = (title, rows, line, wide) => {
       if (!rows?.length) return;
-      add("h4", title);
       const ul = document.createElement("ul");
       for (const r of rows) ul.append(line(r));
-      box.append(ul);
+      card(title, wide).append(ul);
     };
     const at = (r) => (r.at ? ` [${r.at}]` : "");
     list("Decisions", summary.decisions, (d) => Object.assign(document.createElement("li"), { textContent: d.text + at(d) }));
@@ -2214,91 +2343,201 @@
       go.title = "Puts it in the message box for you to edit and send; anything that writes to Linear, Slack, mail or the calendar asks you first";
       go.onclick = async () => {
         await window.jarvis.meetingDiscuss(m.id);
-        closeDrawer();
+        showView("deck");
         $("q").value = `From the "${summary.title}" meeting: ${a.task}${a.owner && !/^(you|unassigned)$/i.test(a.owner) ? ` (${a.owner}'s item)` : ""}${a.due ? `, due ${a.due}` : ""}. `;
         $("q").focus();
       };
       li.append(go);
       return li;
     });
-    list("Open questions", summary.questions, (q) => Object.assign(document.createElement("li"), { textContent: q.text + at(q) }));
+    list("Open questions", summary.questions, (q) => Object.assign(document.createElement("li"), { textContent: q.text + at(q) }), true);
   }
-  async function paintMeetings() {
-    const all = (await window.jarvis.meetingList().catch(() => [])).filter((m) => m.status === "done").slice(0, 8);
-    const list = $("meetings-list");
-    list.innerHTML = "";
-    if (!all.length) { list.textContent = "No meetings yet."; return; }
-    for (const m of all) {
-      const row = document.createElement("div");
-      row.className = "mtg";
-      const head = document.createElement("div");
-      head.className = "head";
-      const who = (m.speakers ?? []).map((s) => s.label).filter((l) => l && !/^(Them|Speaker [A-Z])$/.test(l));
-      const title = document.createElement("strong");
-      title.textContent = m.title || "Untitled meeting";
-      const info = document.createElement("span");
-      info.className = "at";
-      info.textContent = `${mtgWhen(m.startedAt)} · ${Math.max(1, Math.round((m.seconds ?? 0) / 60))} min${who.length ? ` · ${who.join(", ")}` : ""}`;
-      head.append(title, info);
-      const btns = document.createElement("p");
-      btns.className = "row";
-      const notes = document.createElement("div");
-      notes.className = "notes";
-      notes.hidden = true;
-      const sum = document.createElement("button");
-      sum.type = "button";
-      sum.className = "ghost";
-      sum.textContent = m.title ? "Notes" : "Summarize";
-      sum.onclick = async () => {
-        if (!notes.hidden && m.title) { notes.hidden = true; return; }
-        sum.disabled = true;
-        let summary = null;
-        if (m.title) summary = (await window.jarvis.meetingGet(m.id).catch(() => null))?.summary;
-        if (!summary) {
-          sum.textContent = "Summarizing…";
-          const r = await window.jarvis.meetingSummarize(m.id);
-          if (!r.ok) { sum.textContent = "Summarize"; sum.disabled = false; notes.hidden = false; notes.textContent = `Couldn't: ${r.reason}`; return; }
-          summary = r.summary;
-          m.title = summary.title;
-          title.textContent = summary.title;
-        }
-        sum.textContent = "Notes";
-        sum.disabled = false;
-        renderNotes(notes, m, summary);
-        notes.hidden = false;
-      };
-      const talk = document.createElement("button");
-      talk.type = "button";
-      talk.className = "ghost";
-      talk.textContent = "Discuss";
-      talk.onclick = async () => {
-        await window.jarvis.meetingDiscuss(m.id);
-        closeDrawer();
-        addSys(`Talking about ${m.title ? `“${m.title}”` : "the meeting"} from ${mtgWhen(m.startedAt)}. Ask anything; Jarvis sees its transcript for the next 30 minutes.`);
-        $("q").focus();
-      };
-      btns.append(sum, talk);
-      if ((m.engine ?? "parakeet") !== "hybrid" && !m.audioDeletedAt) {
-        const redo = document.createElement("button");
-        redo.type = "button";
-        redo.className = "ghost";
-        redo.textContent = "Redo in English + Hinglish";
-        redo.title = "Transcribe this meeting again with both engines, keeping Parakeet's English and Whisper's Hinglish line by line, on this Mac. The old transcript and notes are kept beside the new ones.";
-        redo.onclick = async () => {
-          redo.disabled = true;
-          redo.textContent = `Re-transcribing… (~${Math.max(1, Math.round((m.seconds ?? 60) / 240))} min)`;
-          const r = await window.jarvis.meetingRetranscribe(m.id);
-          if (!r.ok) { redo.disabled = false; redo.textContent = "Redo in English + Hinglish"; notes.hidden = false; notes.textContent = `Couldn't: ${r.reason}`; return; }
-          addSys(`Re-transcribed the meeting from ${mtgWhen(m.startedAt)} in English + Hinglish: ${r.lines} lines. Summarize it again for fresh notes.`);
-          paintMeetings().catch(() => {});
-        };
-        btns.append(redo);
-      }
-      row.append(head, btns, notes);
-      list.append(row);
+  function paintMtgList() {
+    const q = $("mtg-search").value.trim().toLowerCase();
+    const shown = mtgAll.filter((m) => !q || `${m.title ?? ""} ${mtgWho(m).join(" ")}`.toLowerCase().includes(q));
+    const items = $("mtg-items");
+    items.innerHTML = "";
+    if (!shown.length) { items.append(Object.assign(document.createElement("div"), { className: "res", textContent: mtgAll.length ? "No meeting matches." : "No meetings yet." })); return; }
+    const day = (iso) => { const d = new Date(iso); d.setHours(0, 0, 0, 0); return d.getTime(); };
+    const today = day(new Date().toISOString());
+    const group = (m) => { const d = (today - day(m.startedAt)) / 86400000; return d < 1 ? "Today" : d < 2 ? "Yesterday" : d < 7 ? "This week" : "Earlier"; };
+    let last = null;
+    for (const m of shown) {
+      const g = group(m);
+      if (g !== last) { items.append(Object.assign(document.createElement("div"), { className: "grp", textContent: g })); last = g; }
+      const b = document.createElement("button");
+      b.type = "button";
+      if (m.id === mtgSel) b.setAttribute("aria-current", "true");
+      const who = mtgWho(m);
+      b.append(
+        Object.assign(document.createElement("b"), { textContent: m.title || "Untitled meeting" }),
+        Object.assign(document.createElement("span"), { textContent: `${mtgWhen(m.startedAt)} · ${Math.max(1, Math.round((m.seconds ?? 0) / 60))} min${who.length ? ` · ${who.join(", ")}` : ""}` }),
+      );
+      if (!m.title) b.append(Object.assign(document.createElement("i"), { textContent: "no notes yet" }));
+      b.onclick = () => openMeeting(m.id);
+      items.append(b);
     }
   }
+  async function paintMeetings() {
+    mtgAll = (await window.jarvis.meetingList().catch(() => [])).filter((m) => m.status === "done");
+    $("mtg-empty").hidden = mtgAll.length > 0;
+    if (mtgSel && !mtgAll.some((m) => m.id === mtgSel)) mtgSel = null;
+    if (!mtgSel && mtgAll.length) mtgSel = mtgAll[0].id;
+    paintMtgList();
+    if (mtgSel) await paintMtgDetail();
+    else $("mtg-detail").hidden = true;
+  }
+  async function openMeeting(id) {
+    if (id !== mtgSel) mtgTab = "notes";
+    mtgSel = id;
+    paintMtgList();
+    await paintMtgDetail();
+  }
+  async function paintMtgDetail() {
+    const id = mtgSel;
+    const m = mtgAll.find((x) => x.id === id);
+    if (!m) return;
+    $("mtg-detail").hidden = false;
+    $("mtg-note").textContent = "";
+    $("mtg-title").textContent = m.title || "Untitled meeting";
+    const who = mtgWho(m);
+    $("mtg-meta").textContent = [mtgWhen(m.startedAt), `${Math.max(1, Math.round((m.seconds ?? 0) / 60))} min`, who.join(", "), MTG_LANG[m.engine ?? "parakeet"], m.audioDeletedAt ? "audio deleted" : ""].filter(Boolean).join(" · ");
+    $("mtg-redo").hidden = (m.engine ?? "parakeet") === "hybrid" || !!m.audioDeletedAt;
+    for (const t of $("mtg-tabs").querySelectorAll("button")) t.setAttribute("aria-selected", String(t.dataset.tab === mtgTab));
+    const pane = $("mtg-pane");
+    pane.innerHTML = "";
+    if (mtgTab === "people") return paintMtgPeople(m, pane);
+    const full = await window.jarvis.meetingGet(id).catch(() => null);
+    if (id !== mtgSel) return; // you picked another one meanwhile
+    if (!full) { pane.textContent = "Couldn't open this meeting."; return; }
+    if (mtgTab === "transcript") {
+      const box = document.createElement("div");
+      box.id = "mtg-lines-all";
+      box.className = "card2";
+      if (!full.transcript.length) box.textContent = "This meeting has no transcript lines.";
+      for (const s of full.transcript) {
+        const row = document.createElement("div");
+        if (s.speaker === "You") row.className = "you";
+        row.append(Object.assign(document.createElement("span"), { className: "at", textContent: mtgClock(s.start) }),
+          Object.assign(document.createElement("span"), { className: "who", textContent: s.speaker }), document.createTextNode(s.text));
+        box.append(row);
+      }
+      pane.append(box);
+      return;
+    }
+    const box = document.createElement("div");
+    box.id = "mtg-notes";
+    pane.append(box);
+    if (full.summary) { renderNotes(box, m, full.summary); return; }
+    const c = document.createElement("div");
+    c.className = "card2 wide";
+    c.append(Object.assign(document.createElement("p"), { className: "note", textContent: "No notes yet. Summarize sends this one meeting's transcript to Jarvis's model and writes up decisions, action items and open questions." }));
+    const sum = document.createElement("button");
+    sum.type = "button";
+    sum.textContent = "Summarize";
+    sum.onclick = async () => {
+      sum.disabled = true;
+      sum.textContent = "Summarizing…";
+      const r = await window.jarvis.meetingSummarize(id);
+      if (!r.ok) { sum.disabled = false; sum.textContent = "Summarize"; $("mtg-note").textContent = `Couldn't: ${r.reason}`; return; }
+      m.title = r.summary.title;
+      paintMtgList();
+      if (id === mtgSel) paintMtgDetail();
+    };
+    c.append(sum);
+    box.append(c);
+  }
+  // People tab: every voice on the call; unnamed or unsure ones get a name box.
+  async function paintMtgPeople(m, pane) {
+    const r = await window.jarvis.meetingSpeakers(m.id).catch(() => null);
+    if (m.id !== mtgSel) return;
+    const box = document.createElement("div");
+    box.className = "card2";
+    pane.append(box);
+    if (!r?.speakers?.length) { box.textContent = "Speakers haven't been told apart for this meeting yet. Use “Name voices from recent meetings” in Settings → You to do it."; return; }
+    box.append(Object.assign(document.createElement("p"), { className: "note", style: "margin:0 0 4px", textContent: "Name a voice once and Jarvis knows it in later meetings. Names stay on this Mac." }));
+    const ask = new Map(r.toName.map((sp) => [sp.id, sp]));
+    $("mt-people").innerHTML = "";
+    for (const p of r.people) $("mt-people").append(new Option(p.name));
+    for (const sp of r.speakers) {
+      const row = document.createElement("div");
+      row.className = "mtg-sp";
+      const lbl = document.createElement("div");
+      lbl.className = "lbl";
+      lbl.append(Object.assign(document.createElement("b"), { textContent: `${sp.label} · ${Math.round(sp.seconds ?? 0)} s` }));
+      const said = ask.get(sp.id)?.said;
+      if (said) lbl.append(Object.assign(document.createElement("span"), { textContent: `“${said.slice(0, 140)}”` }));
+      row.append(lbl);
+      if (sp.clip) {
+        const play = document.createElement("button");
+        play.type = "button";
+        play.className = "ghost";
+        play.textContent = "Play";
+        play.onclick = async () => { try { new Audio(await window.jarvis.meetingClip(m.id, sp.id)).play(); } catch {} };
+        row.append(play);
+      }
+      if (ask.has(sp.id)) {
+        const input = document.createElement("input");
+        input.placeholder = "Their name";
+        input.setAttribute("list", "mt-people");
+        input.setAttribute("aria-label", `Name for ${sp.label}`);
+        if (sp.match?.uncertain) input.value = sp.match.name;
+        const save = document.createElement("button");
+        save.type = "button";
+        save.textContent = sp.match?.uncertain ? "Yes, that's them" : "Save";
+        input.oninput = () => { save.textContent = sp.match?.uncertain && input.value === sp.match.name ? "Yes, that's them" : "Save"; };
+        save.onclick = async () => {
+          const name = input.value.trim();
+          if (!name) { $("mtg-note").textContent = "type a name first"; return; }
+          save.disabled = true;
+          const res = await window.jarvis.meetingNameSpeaker(m.id, sp.id, name);
+          if (!res.ok) { save.disabled = false; $("mtg-note").textContent = res.reason; return; }
+          $("mtg-note").textContent = `saved${res.relabelled ? ` · ${res.relabelled} line${res.relabelled === 1 ? "" : "s"} relabelled` : ""}`;
+          paintPeople();
+          await paintMeetings();
+        };
+        row.append(input, save);
+      }
+      box.append(row);
+    }
+  }
+  for (const t of $("mtg-tabs").querySelectorAll("button")) t.onclick = () => { mtgTab = t.dataset.tab; paintMtgDetail(); };
+  $("mtg-search").oninput = paintMtgList;
+  $("mtg-discuss").onclick = async () => {
+    const m = mtgAll.find((x) => x.id === mtgSel);
+    if (!m) return;
+    await window.jarvis.meetingDiscuss(m.id);
+    showView("deck");
+    addSys(`Talking about ${m.title ? `“${m.title}”` : "the meeting"} from ${mtgWhen(m.startedAt)}. Ask anything; Jarvis sees its transcript for the next 30 minutes.`);
+    $("q").focus();
+  };
+  $("mtg-redo").onclick = async () => {
+    const m = mtgAll.find((x) => x.id === mtgSel);
+    if (!m) return;
+    const redo = $("mtg-redo");
+    redo.disabled = true;
+    redo.textContent = `Re-transcribing… (~${Math.max(1, Math.round((m.seconds ?? 60) / 240))} min)`;
+    const r = await window.jarvis.meetingRetranscribe(m.id);
+    redo.disabled = false;
+    redo.textContent = "Redo in English + Hinglish";
+    if (!r.ok) { $("mtg-note").textContent = `Couldn't: ${r.reason}`; return; }
+    $("mtg-note").textContent = `Re-transcribed in English + Hinglish: ${r.lines} lines. Summarize again for fresh notes.`;
+    await paintMeetings();
+  };
+  $("mtg-start").onclick = () => {
+    showView("deck");
+    if (!$("meet").classList.contains("on") && !$("meeting").classList.contains("setup")) $("meet").click();
+  };
+  $("mtg-prefs").onclick = () => {
+    openDrawer();
+    $("meetings-settings").open = true;
+    setTimeout(() => $("meetings-settings").scrollIntoView({ block: "start" }), 60);
+  };
+  function paintMtgKeep(days) {
+    $("mtg-keep").textContent = !days || days === "forever" ? "Recordings are kept until you delete them." : `Audio is kept ${days} days, then deleted; transcripts and notes stay.`;
+  }
   paintMeetings().catch(() => {});
+  try { if (localStorage.getItem("jarvis.view") === "meetings") showView("meetings"); } catch {}
   $("people-name").onclick = async () => {
     $("people-note").textContent = "looking…";
     const r = await window.jarvis.meetingNextToName();
@@ -2362,10 +2601,12 @@
     $("set-launchAtLogin").checked = s.settings?.launchAtLogin === "on";
     $("set-meetingPrompt").checked = s.settings?.meetingPrompt !== "off";
     $("set-meetingAudioDays").value = s.settings?.meetingAudioDays ?? "forever";
+    paintMtgKeep(s.settings?.meetingAudioDays);
   }).catch(() => {});
   $("set-meetingPrompt").onchange = (e) => window.jarvis.appCommand("set.meetingPrompt", { value: e.target.checked ? "on" : "off" });
   $("set-meetingAudioDays").onchange = async (e) => {
     await window.jarvis.appCommand("set.meetingAudioDays", { value: e.target.value });
+    paintMtgKeep(e.target.value);
     paintMeetings().catch(() => {});
   };
   $("set-launchAtLogin").onchange = async (e) => {
