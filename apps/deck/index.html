@@ -99,6 +99,31 @@
   #working .tdot:nth-child(2) { animation-delay: 0.15s; }
   #working .tdot:nth-child(3) { animation-delay: 0.3s; }
   @keyframes tbounce { 0%, 100% { transform: translateY(0); opacity: 0.45; } 50% { transform: translateY(-5px); opacity: 1; } }
+  /* ⌘K: one box to ask Jarvis or jump to a page, setting, meeting or action. */
+  #h-find {
+    display: inline-flex; align-items: center; gap: 8px; width: 300px; max-width: 40vw; padding: 6px 10px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; color: #8a9d94; font: 400 13px var(--body);
+  }
+  #h-find:hover { border-color: #3b5249; filter: none; }
+  #h-find svg { width: 14px; height: 14px; flex: 0 0 auto; }
+  #h-find span { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  kbd { font-family: var(--cap); font-size: 10.5px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: #8a9d94; }
+  #palette {
+    position: fixed; z-index: 65; top: 12vh; left: 0; right: 0; margin: 0 auto; width: min(640px, calc(100vw - 32px));
+    display: none; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7); overflow: hidden; animation: cardin 140ms ease;
+  }
+  #palette.open { display: flex; }
+  #pal-q { flex: 0 0 auto; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 16px 18px; font-size: 16px; }
+  #pal-q:focus { outline: none; }
+  #pal-list { max-height: min(420px, 56vh); overflow-y: auto; padding: 6px; }
+  #pal-list .grp { font-family: var(--cap); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a9d94; margin: 8px 10px 4px; }
+  #pal-list [role="option"] { display: flex; gap: 10px; align-items: baseline; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+  #pal-list [role="option"] .l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pal-list [role="option"] .h { color: #8a9d94; font-size: 12px; white-space: nowrap; }
+  #pal-list [role="option"][aria-selected="true"] { background: #15201b; color: var(--accent); }
+  .pal-foot { padding: 8px 14px; border-top: 1px solid var(--line); }
+  @media (max-width: 860px) { #h-find span, #h-find kbd { display: none; } #h-find { width: auto; } }
   /* Settings window: sections listed on the left, one shown at a time. */
   #scrim { position: fixed; inset: 0; z-index: 55; background: rgba(3, 5, 6, 0.7); }
   #drawer {
@@ -444,6 +469,7 @@
   <span class="tele" id="h-state"><span class="pulse"></span> idle</span>
   <span style="flex:1"></span>
   <button type="button" class="ghost" id="h-rec" title="A meeting is being recorded: open it on the deck"><span class="rec"></span><span id="h-rec-clock">recording</span></button>
+  <button type="button" id="h-find" title="Ask Jarvis or jump to a page, setting or meeting" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Ask Jarvis or jump to…</span><kbd id="h-find-key">⌘K</kbd></button>
 </header>
 <div id="project-menu" role="menu" aria-label="Projects"></div>
 <div id="shell">
@@ -611,6 +637,11 @@
         </div>
       </div>
     </div>
+  </div>
+  <div id="palette" role="dialog" aria-modal="true" aria-label="Ask Jarvis or jump to">
+    <input id="pal-q" type="text" placeholder="Ask Jarvis, or jump to a page, setting or meeting" aria-label="Ask Jarvis or jump to" aria-controls="pal-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" />
+    <div id="pal-list" role="listbox" aria-label="Results"></div>
+    <div class="pal-foot res">↑↓ to move · Enter to open · Esc to close</div>
   </div>
   <aside id="drawer" role="dialog" aria-modal="true" aria-label="Settings">
     <nav id="set-nav" aria-label="Settings sections">
@@ -2990,6 +3021,103 @@
   }
   $("mcp-refresh").onclick = mcpRefresh;
 
+  // ⌘K: ask Jarvis, or jump to a page, a settings section, a meeting or an action.
+  const PAL_PAGES = [["deck", "Deck"], ["inbox", "Inbox"], ["meetings", "Meetings"], ["auto", "Automations"], ["activity", "Activity"]];
+  let palRows = [], palSel = 0;
+  function palItems(q) {
+    const items = [];
+    for (const [v, label] of PAL_PAGES) items.push({ group: "Pages", label, hint: v === "inbox" ? $("inbox-badge").textContent : "", run: () => showView(v) });
+    items.push(
+      { group: "Actions", label: "Take meeting notes", run: () => $("mtg-start").click() },
+      { group: "Actions", label: voiceOn ? "Turn voice mode off" : "Turn voice mode on", run: () => $("voice").click() },
+      { group: "Actions", label: "Brief me", run: () => $("brief-btn").click() },
+      { group: "Actions", label: "Launch a worker", run: () => { showView("deck"); $("q").value = "launch worker: "; $("q").focus(); } },
+      { group: "Actions", label: "Switch project", run: () => $("h-project").click() },
+      { group: "Actions", label: "Run setup again", run: () => $("profile-setup").click() },
+    );
+    for (const b of $("set-nav").querySelectorAll("[data-pane]")) {
+      items.push({ group: "Settings", label: b.firstElementChild.textContent, hint: b.querySelector(".hint")?.textContent ?? "", words: $(b.dataset.pane).textContent, run: () => openDrawer(b.dataset.pane) });
+    }
+    // Meetings only when you search, so the empty list stays short.
+    if (q) for (const m of mtgAll) items.push({ group: "Meetings", label: m.title || "Untitled meeting", hint: mtgWhen(m.startedAt), words: mtgWho(m).join(" "), run: () => { showView("meetings"); openMeeting(m.id); } });
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    // Labels match on every word; a settings section or meeting also matches on its contents.
+    const hit = (it) => words.every((w) => `${it.group} ${it.label}`.toLowerCase().includes(w)) ||
+      (it.words && words.every((w) => `${it.label} ${it.words}`.toLowerCase().includes(w)));
+    const shown = items.filter(hit);
+    const meet = shown.filter((it) => it.group === "Meetings");
+    const out = [...shown.filter((it) => it.group !== "Meetings"), ...meet.slice(0, 6)];
+    if (q) {
+      const ask = { group: "Ask", label: `Ask Jarvis: “${q}”`, run: () => { showView("deck"); $("q").value = q; $("f").requestSubmit(); } };
+      if (out.length) out.push(ask); else out.unshift(ask);
+    }
+    return out;
+  }
+  function palPaint() {
+    const q = $("pal-q").value.trim();
+    palRows = palItems(q);
+    palSel = Math.min(palSel, Math.max(0, palRows.length - 1));
+    const list = $("pal-list");
+    list.innerHTML = "";
+    let last = null;
+    palRows.forEach((it, i) => {
+      if (it.group !== last) { list.append(Object.assign(document.createElement("div"), { className: "grp", textContent: it.group })); last = it.group; }
+      const row = document.createElement("div");
+      row.id = `pal-${i}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(i === palSel));
+      row.append(Object.assign(document.createElement("span"), { className: "l", textContent: it.label }));
+      if (it.hint) row.append(Object.assign(document.createElement("span"), { className: "h", textContent: it.hint }));
+      row.onmousemove = () => { if (palSel !== i) { palSel = i; palMark(); } };
+      row.onclick = () => palRun(i);
+      list.append(row);
+    });
+    palMark();
+  }
+  function palMark() {
+    for (const r of $("pal-list").querySelectorAll("[role=option]")) r.setAttribute("aria-selected", String(r.id === `pal-${palSel}`));
+    const cur = $(`pal-${palSel}`);
+    $("pal-q").setAttribute("aria-activedescendant", cur ? cur.id : "");
+    cur?.scrollIntoView({ block: "nearest" });
+  }
+  function palRun(i) {
+    const it = palRows[i];
+    closePalette();
+    it?.run();
+  }
+  function openPalette() {
+    if ($("onboard").classList.contains("show")) return;
+    closeDrawer();
+    $("palette").classList.add("open");
+    $("scrim").style.display = "block";
+    $("pal-q").value = "";
+    palSel = 0;
+    palPaint();
+    $("pal-q").focus();
+  }
+  function closePalette() {
+    if (!$("palette").classList.contains("open")) return;
+    $("palette").classList.remove("open");
+    if (!$("drawer").classList.contains("open")) $("scrim").style.display = "none";
+  }
+  $("pal-q").oninput = () => { palSel = 0; palPaint(); };
+  $("pal-q").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (palRows.length) palSel = (palSel + (e.key === "ArrowDown" ? 1 : -1) + palRows.length) % palRows.length;
+      palMark();
+    } else if (e.key === "Enter") { e.preventDefault(); palRun(palSel); }
+    else if (e.key === "Escape") { e.stopPropagation(); closePalette(); }
+  });
+  $("h-find").onclick = openPalette;
+  $("scrim").addEventListener("click", closePalette);
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if ($("palette").classList.contains("open")) closePalette(); else openPalette();
+    } else if (e.key === "Escape") closePalette();
+  });
+  if (!/Mac/i.test(navigator.platform)) $("h-find-key").textContent = "Ctrl K";
   try { const v = localStorage.getItem("jarvis.view"); if (v && $("rail").querySelector(`[data-view="${CSS.escape(v)}"]`)) showView(v); } catch {}
 
   sizeCanvas();
